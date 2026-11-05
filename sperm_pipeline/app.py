@@ -278,6 +278,11 @@ class App(tk.Tk):
     def _close(self):
         try:
             S.save(self._collect())
+        except ValueError as e:
+            # раньше настройки молча не сохранялись, если в каком-то поле опечатка
+            if not messagebox.askyesno('Настройки не сохранены',
+                                       f'{e}\n\nЗакрыть без сохранения настроек?'):
+                return
         except Exception:
             pass
         self.destroy()
