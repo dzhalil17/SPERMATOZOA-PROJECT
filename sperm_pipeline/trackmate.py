@@ -119,11 +119,38 @@ def find_jobs(root: Path):
     return jobs, skipped
 
 
-def run(fiji_exe: str, videos_dir: Path, out_dir: Path, log=print, stop=lambda: False):
+def run(fiji_exe: str, videos_dir: Path, out_dir: Path, log=print, stop=lambda: False, raise_if_none=True) -> dict:
+    """→ {'ok': [(видео, отрезок, кадров, спотов, треков)], 'bad': [(видео, отрезок, ошибка)], 'already': [...]}.
+    Отрезки, у которых уже есть оба CSV, не пересчитываются (продолжение после сбоя)."""
     fiji = fiji_exe or find_fiji()
     if not fiji or not Path(fiji).exists():
         raise FileNotFoundError('Не найдена Fiji: укажите путь к ImageJ-win64.exe на вкладке «Запуск»')
     jobs, skipped = find_jobs(Path(videos_dir))
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # продолжение после сбоя — только если параметры те же, что у уже посчитанных CSV
+    pfile = out_dir / '_параметры TrackMate.json'
+    cur = {k: v for k, v in params().items() if k != 'VIDEO_EXT'}
+    try:
+        same = json.loads(pfile.read_text(encoding='utf-8')) == cur
+    except Exception:
+        same = False
+    already = [j for j in jobs if (out_dir / j[0] / f'{j[1]}_spots.csv').exists()
+               and (out_dir / j[0] / f'{j[1]}_tracks.csv').exists()] if same else []
+    if not same:
+        old = [f for j in jobs for f in (out_dir / j[0] / f'{j[1]}_spots.csv', out_dir / j[0] / f'{j[1]}_tracks.csv')
+               if f.exists()]
+        if old:
+            log(f'Параметры TrackMate не те, что у прежних CSV — удаляю {len(old)} старых CSV и считаю заново')
+            for f in old:
+                f.unlink()
+    pfile.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding='utf-8')
+    if already:
+        log(f'Уже посчитаны раньше (есть оба CSV), пропускаю: {len(already)} из {len(jobs)} отрезков')
+        jobs = [j for j in jobs if j not in already]
+    res = {'ok': [], 'bad': [], 'already': [(j[0], j[1]) for j in already]}
+    if not jobs:
+        return res
     for v in dict.fromkeys(j[0] for j in jobs):
         segs = [j for j in jobs if j[0] == v]
         kinds = {'seq': 'папки с кадрами', 'file': 'файлы'}
@@ -143,7 +170,9 @@ def run(fiji_exe: str, videos_dir: Path, out_dir: Path, log=print, stop=lambda: 
     if progress.exists():
         progress.unlink()
     flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-    with (out_dir / '_fiji_журнал.txt').open('w', encoding='utf-8', errors='replace') as flog:
+    with (out_dir / '_fiji_журнал.txt').open('a', encoding='utf-8', errors='replace') as flog:
+        flog.write(f'\n===== {time.strftime("%Y-%m-%d %H:%M:%S")}  {videos_dir}\n')
+        flog.flush()
         proc = subprocess.Popen(cmd, stdout=flog, stderr=subprocess.STDOUT, env=env, creationflags=flags)
         seen, ok, bad = 0, 0, 0
         while True:
@@ -153,9 +182,11 @@ def run(fiji_exe: str, videos_dir: Path, out_dir: Path, log=print, stop=lambda: 
                 p = line.split('|')
                 if p[0] == 'OK':
                     ok += 1
+                    res['ok'].append((p[1], p[2], int(p[3]), int(p[4]), int(p[5])))
                     log(f'  OK {p[1]} / {p[2]}: кадров {p[3]}, спотов {p[4]}, треков {p[5]}')
                 elif p[0] == 'ERR':
                     bad += 1
+                    res['bad'].append((p[1], p[2] if len(p) > 3 else '', p[-1]))
                     log(f'  ОШИБКА {" / ".join(p[1:-1])}: {p[-1]}')
                 elif p[0] == 'START':
                     log(f'  {p[1]} / {p[2]}: обработка…')
@@ -167,10 +198,12 @@ def run(fiji_exe: str, videos_dir: Path, out_dir: Path, log=print, stop=lambda: 
                 break
             time.sleep(0.5)
     log(f'TrackMate: готово {ok}, с ошибкой {bad}. Журнал Fiji: {out_dir / "_fiji_журнал.txt"}')
-    if not ok:
+    if stop():
+        return res
+    if not ok and not already and raise_if_none:
         raise RuntimeError(f'Fiji не обработала ни одного видео (код {proc.returncode}); '
                            f'подробности — {out_dir / "_fiji_журнал.txt"}')
-    return out_dir
+    return res
 
 
 # =============================================================================
@@ -181,6 +214,7 @@ import json, os, sys, traceback
 import jarray
 from java.lang import System, Math, Throwable
 from java.io import File, OutputStreamWriter, FileOutputStream
+from java.nio.file import Files, Paths, StandardCopyOption
 from ij import IJ, ImagePlus, ImageStack
 from ij.plugin import FolderOpener
 from ij.process import StackConverter, ByteProcessor, ImageProcessor
@@ -323,10 +357,12 @@ def names(fm, keys, kind):
 
 
 def write_csv(path, rows):
-    w = OutputStreamWriter(FileOutputStream(path), 'UTF-8')
+    # via a .part file: a crash never leaves a half-written CSV that the resume logic would trust
+    w = OutputStreamWriter(FileOutputStream(path + '.part'), 'UTF-8')
     for r in rows:
         w.write(','.join(['"%s"' % c if (',' in c or '"' in c) else c for c in r]) + '\n')
     w.close()
+    Files.move(Paths.get(path + '.part'), Paths.get(path), StandardCopyOption.REPLACE_EXISTING)
 
 
 def export(model, out_base):

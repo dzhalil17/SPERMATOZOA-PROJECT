@@ -108,6 +108,9 @@ def main():
     assert set(summ['video']) == {'synthetic', 'synthetic_png'}, 'нет одного из видео'
     assert (summ['n_tracks'] >= 20).all(), 'слишком мало треков'
     assert not (root / 'out' / pipeline.DIR_TRACKMATE / 'synthetic_png' / '_rejected_spots.csv').exists()
+    from sperm_pipeline import trackmate                                # повтор: всё уже посчитано
+    again = trackmate.run(fiji, root / 'videos', root / 'out' / pipeline.DIR_TRACKMATE, log=print)
+    assert len(again['already']) == 2 and not again['ok'], again
     if len(sys.argv) > 3:
         check_from_mpg(fiji, sys.argv[3], root)
     print('FIJI CHECK: OK')
