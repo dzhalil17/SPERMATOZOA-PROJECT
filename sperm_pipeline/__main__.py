@@ -14,11 +14,6 @@ from pathlib import Path
 
 def fiji_mode(config_path: str) -> int:
     from . import settings as S, pipeline
-    for stream in (sys.stdout, sys.stderr):        # консоль Windows по умолчанию cp1251 — без этого «✓» роняет вывод
-        try:
-            stream.reconfigure(encoding='utf-8', errors='replace')
-        except Exception:
-            pass
     js = json.loads(Path(config_path).read_text(encoding='utf-8'))
     if 'file_list' in js and 'spots_dir' not in js:
         print('Шаг 6 больше не нужен: SpermPipeline делает кластеризацию на шаге 5 (папка «5 КЛАСТЕРИЗАЦИЯ»).')
@@ -31,8 +26,18 @@ def fiji_mode(config_path: str) -> int:
     return 0
 
 
+def _utf8_console():
+    # консоль Windows бывает cp1251/cp866/cp1252 — без этого русский текст и «✓» роняют вывод
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+
+
 def main():
     multiprocessing.freeze_support()                # нужно для .exe (PyInstaller) на Windows
+    _utf8_console()
     if '--selftest' in sys.argv:
         from . import selftest
         out = []
