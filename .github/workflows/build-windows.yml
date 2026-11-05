@@ -1,0 +1,32 @@
+name: Build Windows exe
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Self-test (source)
+        run: python SpermPipeline.py --selftest
+      - name: Build
+        run: python -m PyInstaller --noconfirm --clean --windowed --name SpermPipeline --collect-all hdbscan --collect-submodules sklearn --hidden-import sklearn.utils._typedefs SpermPipeline.py
+      - name: Self-test (exe)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\SpermPipeline\SpermPipeline.exe -ArgumentList '--selftest' -Wait -PassThru
+          Get-Content dist\SpermPipeline\selftest_log.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+          Remove-Item dist\SpermPipeline\selftest_log.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SpermPipeline-windows
+          path: dist/SpermPipeline
