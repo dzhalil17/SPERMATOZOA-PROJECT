@@ -5,6 +5,7 @@ import sys
 import numpy as np
 import pandas as pd
 
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 new, old = (pd.read_excel(p) for p in sys.argv[1:3])
 for d in (new, old):
     d['SEGMENT'] = d['SEGMENT'].astype(str)

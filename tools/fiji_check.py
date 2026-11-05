@@ -36,6 +36,7 @@ def make_video(path: Path, n_frames=150, w=400, h=300, seed=1):
 
 
 def main():
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     fiji = sys.argv[1]
     root = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(tempfile.mkdtemp(prefix='SpermPipeline_fiji_'))
     make_video(root / 'videos' / 'synthetic' / '0-149.tif')
