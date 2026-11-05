@@ -1,6 +1,7 @@
 """
-Весь путь после TrackMate одной командой:
+Весь путь от видео до кластеров одной командой:
 
+  0 TRACKMATE      видео → Fiji без окна: 8-bit, контраст, Gaussian, Find Maxima, LoG + LAP → CSV  → trackmate.py
   1 ТАБЛИЦЫ        оформление экспортов TrackMate (замена макросов Excel)          → tables.py
   2 ФИЛЬТРАЦИЯ     супер-фильтрация каждого отрезка видео (*proc.xlsx + журнал)     → filtration.py
   3 СКЛЕЙКА        таблицы треков всех отрезков одного видео в одну (CONCATTING.py)
@@ -27,6 +28,7 @@ import pandas as pd
 from . import settings as S
 from . import tables
 
+DIR_TRACKMATE = '0 TRACKMATE'
 DIR_TABLES = '1 ТАБЛИЦЫ'
 DIR_FILTER = '2 ФИЛЬТРАЦИЯ'
 DIR_CONCAT = '3 СКЛЕЙКА'
@@ -144,14 +146,27 @@ def run(cfg: dict, log=print, stop=lambda: False) -> Path:
     (out_root / f'настройки {stamp}.json').write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
     S.apply(cfg)
 
+    # ---------- 0. TrackMate в Fiji без окна ----------
+    raw_dir = g.get('raw_dir')
+    if g.get('step_trackmate'):
+        from . import trackmate
+        if not g.get('videos_dir'):
+            raise ValueError('Шаг 0 включён, но не задана папка с видео')
+        log(f'\n=== 0. TRACKMATE (Fiji без окна) ===')
+        trackmate.run(g.get('fiji_exe', ''), Path(g['videos_dir']), out_root / DIR_TRACKMATE, log, stop)
+        raw_dir = str(out_root / DIR_TRACKMATE)
+        g['step_tables'] = True
+    if stop():
+        raise Stopped()
+
     # ---------- 1. оформление таблиц ----------
     spots_root = Path(g['spots_dir']) if g.get('spots_dir') else None
     tracks_root = Path(g['tracks_dir']) if g.get('tracks_dir') else None
     if g['step_tables']:
-        if not g.get('raw_dir'):
+        if not raw_dir:
             raise ValueError('Шаг 1 включён, но не задана папка с экспортами TrackMate (.csv)')
         log(f'\n=== 1. ОФОРМЛЕНИЕ ТАБЛИЦ (вместо макросов Excel) ===')
-        tables.format_tree(Path(g['raw_dir']), out_root / DIR_TABLES, log)
+        tables.format_tree(Path(raw_dir), out_root / DIR_TABLES, log)
         spots_root = tracks_root = out_root / DIR_TABLES
     if stop():
         raise Stopped()

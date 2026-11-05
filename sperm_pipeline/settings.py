@@ -8,9 +8,26 @@ import json
 import os
 from pathlib import Path
 
-from . import filtration, casa, clustering
+from . import filtration, casa, clustering, trackmate
 
 # (модуль, имя, подпись). Тип значения определяется по значению по умолчанию; choices — список вариантов.
+TRACKMATE = [
+    ('DO_8BIT', 'Перевести в 8-bit'),
+    ('CONTRAST_MIN', 'Контраст: Min (→ 0)'),
+    ('CONTRAST_MAX', 'Контраст: Max (→ 255)'),
+    ('GAUSSIAN_SIGMA', 'Gaussian Blur: sigma (0 — без размытия)'),
+    ('NOISE_TOLERANCE', 'Find Maxima: noise tolerance (prominence)'),
+    ('EXCLUDE_EDGE_MAXIMA', 'Find Maxima: exclude edge maxima'),
+    ('LIGHT_BACKGROUND', 'Find Maxima: light background'),
+    ('LOG_RADIUS', 'TrackMate LoG: радиус, px (диаметр / 2)'),
+    ('LOG_QUALITY_THRESHOLD', 'TrackMate LoG: quality threshold'),
+    ('LOG_SUBPIXEL', 'TrackMate LoG: субпиксельная локализация'),
+    ('LOG_MEDIAN_FILTER', 'TrackMate LoG: медианный фильтр'),
+    ('LINKING_MAX_DISTANCE', 'LAP-трекер: linking max distance, px'),
+    ('GAP_CLOSING_MAX_DISTANCE', 'LAP-трекер: gap-closing max distance, px'),
+    ('MAX_FRAME_GAP', 'LAP-трекер: gap-closing max frame gap'),
+    ('VIDEO_EXT', 'Расширения видео (через пробел)'),
+]
 FILTRATION = [
     ('LINK_MAX_GAP', 'Сшивка: макс. пропуск кадров между фрагментами'),
     ('LINK_SPEED_DIFF', 'Сшивка: макс. относительная разница средних скоростей'),
@@ -75,11 +92,14 @@ CLUSTERING = [
     ('SAVE_TRACK_LABELS', 'Сохранять метки треков'),
 ]
 GENERAL_DEFAULTS = {
+    'videos_dir': '',       # видео (.tif/.avi) — для шага 0
+    'fiji_exe': '',         # ImageJ-win64.exe; пусто — ищется в обычных местах
     'raw_dir': '',          # сырые экспорты TrackMate (.csv) — для шага 1
     'spots_dir': '',        # оформленные *_allspots.xlsx (или папки-видео с ними) — вход шага 2, если шаг 1 выключен
     'tracks_dir': '',       # оформленные *_tracks.xlsx (не обязательно: фильтр их читает, но не использует)
     'casa_dir': '',         # готовые таблицы CASA TRACKS — вход шага 5, если шаги 2–4 выключены
     'output_dir': '',
+    'step_trackmate': False,
     'step_tables': True,
     'step_filter': True,
     'step_cluster': True,
@@ -93,7 +113,7 @@ def _module_default(mod, name):
     return getattr(mod, name)
 
 
-SECTIONS = [('filtration', filtration, FILTRATION), ('casa', casa, CASA), ('clustering', clustering, CLUSTERING)]
+SECTIONS = [('trackmate', trackmate, TRACKMATE), ('filtration', filtration, FILTRATION), ('casa', casa, CASA), ('clustering', clustering, CLUSTERING)]
 
 # значения по умолчанию снимаются при импорте, до того как приложение что-либо поменяет
 DEFAULTS = {sec: {item[0]: _module_default(mod, item[0]) for item in spec} for sec, mod, spec in SECTIONS}

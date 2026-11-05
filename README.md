@@ -1,10 +1,9 @@
-# SpermPipeline — всё, что идёт после TrackMate, одним приложением для Windows
+# SpermPipeline — от видео до кластеров одним приложением для Windows
 
 ```
-Fiji-плагин (шаги 1–4: контраст + Gaussian → Find Maxima → TrackMate → *_allspots.xlsx, *_tracks.xlsx)
-        │
-        ▼
 SpermPipeline
+  0 TRACKMATE      видео → ваша Fiji без окна: 8-bit → контраст → Gaussian → Find Maxima (Single Points)
+                   → TrackMate LoG + LAP → CSV спотов и треков (шаги Fiji-плагина Sperm_Tracking_Pipeline)
   1 ТАБЛИЦЫ        оформление экспортов TrackMate (.csv) — вместо макросов Excel
   2 ФИЛЬТРАЦИЯ     супер-фильтрация каждого отрезка: сшивка → разрез у границ → свап коллизий → фильтр по длине
   3 СКЛЕЙКА        отрезки одного видео в одну таблицу (бывший CONCATTING.py)
@@ -25,7 +24,15 @@ SpermPipeline
 | Собрать .exe без Python | `build_exe.bat` → `dist\SpermPipeline\SpermPipeline.exe` (или скачать готовый со страницы Actions репозитория) |
 | Самопроверка | `SpermPipeline.exe --selftest` / `python SpermPipeline.py --selftest` (синтетическое видео, весь путь) |
 
-## Из Fiji-плагина
+## Шаг 0: TrackMate без окна
+
+Нужна установленная Fiji (путь к `ImageJ-win64.exe` — на вкладке «Запуск»; пусто — ищется в `C:\Fiji.app` и т.п.).
+Приложение запускает её в фоне со встроенным Jython-скриптом. Видео: `.tif/.tiff/.avi`; файл = отрезок (имя начинается
+с диапазона кадров, `1223-1622.tif`), подпапка = видео. Координаты — в пикселях, время — в кадрах. Параметры — вкладка
+«TrackMate»: **один набор на все видео**, без подгонки под отрезок. Проверка на синтетическом видео:
+`python tools/fiji_check.py "C:\Fiji.app\ImageJ-win64.exe"`.
+
+## Из Fiji-плагина (по желанию)
 
 Плагин на шаге 5 вызывает `python.exe <скрипт> config.json` с папками `spots_dir`, `tracks_dir`, `output_dir`.
 Укажите в плагине вместо `super_filtration_with_excel_10_files.py` файл **`SpermPipeline.py`** — он выполнит шаги 2–5
@@ -36,6 +43,7 @@ SpermPipeline
 
 ```
 <папка результатов>\
+  0 TRACKMATE\<видео>\            <отрезок>_spots.csv, <отрезок>_tracks.csv; _fiji_журнал.txt (если шаг 0 включён)
   настройки <дата>.json            все параметры прогона — чтобы результат можно было повторить
   _проверка отрезков.xlsx          по каждому отрезку: файлы, число треков, ошибки, исправлены ли столбцы
   1 ТАБЛИЦЫ\<видео>\               оформленные *_spots.xlsx / *_tracks.xlsx (если шаг 1 включён)

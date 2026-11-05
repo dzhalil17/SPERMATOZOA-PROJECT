@@ -13,7 +13,7 @@ from tkinter import ttk, filedialog, messagebox
 from . import settings as S
 from . import pipeline
 
-TITLE = 'SpermPipeline — после TrackMate: таблицы → супер-фильтрация → CASA → HDBSCAN'
+TITLE = 'SpermPipeline — видео → TrackMate → таблицы → супер-фильтрация → CASA → HDBSCAN'
 
 
 def _to_text(v) -> str:
@@ -62,7 +62,8 @@ class App(tk.Tk):
         nb = ttk.Notebook(self)
         nb.pack(fill='both', expand=True, padx=6, pady=6)
         self._run_tab(nb)
-        for sec, title, spec in [('filtration', 'Супер-фильтрация', S.FILTRATION),
+        for sec, title, spec in [('trackmate', 'TrackMate', S.TRACKMATE),
+                                 ('filtration', 'Супер-фильтрация', S.FILTRATION),
                                  ('casa', 'CASA-метрики', S.CASA),
                                  ('clustering', 'Кластеризация', S.CLUSTERING)]:
             self._param_tab(nb, sec, title, spec)
@@ -96,6 +97,13 @@ class App(tk.Tk):
                 row=r, column=0, columnspan=3, sticky='w', pady=(8, 2))
             r += 1
 
+        step_row('step_trackmate', '0. TrackMate в Fiji без окна: 8-bit → контраст → Gaussian → Find Maxima → LoG + LAP')
+        self.e_videos = folder_row('videos_dir', 'Видео (.tif/.avi):', 'файл = отрезок (имя начинается с диапазона кадров), подпапка = видео')
+        ttk.Label(f, text='Fiji (ImageJ-win64.exe):').grid(row=r, column=0, sticky='w', padx=(24, 4))
+        self.e_fiji = ttk.Entry(f, textvariable=self.gv['fiji_exe'], width=80)
+        self.e_fiji.grid(row=r, column=1, sticky='we')
+        ttk.Button(f, text='…', width=3, command=self._pick_fiji).grid(row=r, column=2, padx=2)
+        r += 1
         step_row('step_tables', '1. Оформить экспорты TrackMate (.csv) — вместо макросов Excel')
         self.e_raw = folder_row('raw_dir', 'Экспорты TrackMate:', 'папка с *_spots.csv и *_tracks.csv или папка с подпапками-видео')
         step_row('step_filter', '2–4. Супер-фильтрация → склейка по видео → CASA-метрики (VAP, STR, LIN …)')
@@ -138,11 +146,24 @@ class App(tk.Tk):
         self._sync()
 
     def _sync(self):
+        tm = self.gv['step_trackmate'].get()
+        if tm:
+            self.gv['step_tables'].set(True)          # CSV из шага 0 оформляет шаг 1
+        self.e_videos.configure(state='normal' if tm else 'disabled')
+        self.e_fiji.configure(state='normal' if tm else 'disabled')
+        if tm and not self.gv['fiji_exe'].get():
+            from .trackmate import find_fiji
+            self.gv['fiji_exe'].set(find_fiji())
         t, flt, cl = (self.gv['step_tables'].get(), self.gv['step_filter'].get(), self.gv['step_cluster'].get())
-        self.e_raw.configure(state='normal' if t else 'disabled')
+        self.e_raw.configure(state='normal' if t and not tm else 'disabled')
         self.e_spots.configure(state='normal' if flt and not t else 'disabled')
         self.e_tracks.configure(state='normal' if flt and not t else 'disabled')
         self.e_casa.configure(state='normal' if cl and not flt else 'disabled')
+
+    def _pick_fiji(self):
+        f = filedialog.askopenfilename(title='Fiji: ImageJ-win64.exe', filetypes=[('Fiji', '*.exe'), ('Все', '*.*')])
+        if f:
+            self.gv['fiji_exe'].set(os.path.normpath(f))
 
     def _pick(self, key):
         d = filedialog.askdirectory(initialdir=self.gv[key].get() or None)

@@ -30,3 +30,36 @@ jobs:
         with:
           name: SpermPipeline-windows
           path: dist/SpermPipeline
+
+  fiji-step0:
+    # шаг 0 (TrackMate в Fiji без окна) на синтетическом видео, весь путь до кластеризации
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: python -m pip install -r requirements.txt
+      - name: Download Fiji
+        shell: pwsh
+        run: |
+          $urls = @(
+            'https://downloads.imagej.net/fiji/archive/20240614-2117/fiji-win64.zip',
+            'https://downloads.imagej.net/fiji/latest/fiji-win64.zip',
+            'https://downloads.imagej.net/fiji/stable/fiji-stable-win64-jdk.zip',
+            'https://downloads.imagej.net/fiji/latest/fiji-latest-win64-jdk.zip')
+          foreach ($u in $urls) {
+            try { Invoke-WebRequest -Uri $u -OutFile fiji.zip -UseBasicParsing; Write-Host "OK $u"; break }
+            catch { Write-Host "failed $u" }
+          }
+          Expand-Archive fiji.zip -DestinationPath fiji
+          $exe = Get-ChildItem fiji -Recurse -Include ImageJ-win64.exe,fiji-windows-x64.exe,fiji-win64.exe | Select-Object -First 1
+          Write-Host "Fiji launcher: $($exe.FullName)"
+          "FIJI_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Step 0 → 5 on a synthetic video
+        run: python tools/fiji_check.py "$env:FIJI_EXE" "$env:RUNNER_TEMP\fijicheck"
+      - name: Fiji log
+        if: always()
+        shell: pwsh
+        run: Get-Content "$env:RUNNER_TEMP\fijicheck\out\0 TRACKMATE\_fiji_журнал.txt" -ErrorAction SilentlyContinue
