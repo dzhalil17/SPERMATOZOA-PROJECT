@@ -8,9 +8,17 @@ import json
 import os
 from pathlib import Path
 
-from . import filtration, casa, clustering, trackmate
+from . import filtration, casa, clustering, trackmate, frames
 
 # (модуль, имя, подпись). Тип значения определяется по значению по умолчанию; choices — список вариантов.
+FRAMES = [
+    ('MIN_BRIGHTNESS', 'Кадр хороший, если средняя яркость > (чёрный ~15–25, норма ~130–180)'),
+    ('MAX_BRIGHTNESS', '… и средняя яркость < (белые вспышки ~250)'),
+    ('MAX_STD', '… и разброс яркости (std) < (норма ~12–17, «снег» ~80)'),
+    ('MAX_HF', '… и перепады между соседними пикселями < (норма ~2, шум ~20)'),
+    ('MIN_SEGMENT_LEN', 'Отрезок короче N кадров — мусор переключения'),
+    ('TRIM', 'Отрезать кадров с каждого края отрезка (затухание)'),
+]
 TRACKMATE = [
     ('DO_8BIT', 'Перевести в 8-bit'),
     ('CONTRAST_MIN', 'Контраст: Min (→ 0)'),
@@ -92,13 +100,17 @@ CLUSTERING = [
     ('SAVE_TRACK_LABELS', 'Сохранять метки треков'),
 ]
 GENERAL_DEFAULTS = {
-    'videos_dir': '',       # видео (.tif/.avi) — для шага 0
+    'mpg_dir': '',          # видео .mpg — для шага 00 (нарезка)
+    'ffmpeg_exe': '',       # ffmpeg.exe; пусто — путь из скрипта нарезки или ffmpeg из PATH
+    'frames_dir': '',       # куда класть кадры; пусто — «00 КАДРЫ» в папке результатов
+    'videos_dir': '',       # папки с кадрами (или .tif/.avi) — вход шага 0, если шаг 00 выключен
     'fiji_exe': '',         # ImageJ-win64.exe; пусто — ищется в обычных местах
     'raw_dir': '',          # сырые экспорты TrackMate (.csv) — для шага 1
     'spots_dir': '',        # оформленные *_allspots.xlsx (или папки-видео с ними) — вход шага 2, если шаг 1 выключен
     'tracks_dir': '',       # оформленные *_tracks.xlsx (не обязательно: фильтр их читает, но не использует)
     'casa_dir': '',         # готовые таблицы CASA TRACKS — вход шага 5, если шаги 2–4 выключены
     'output_dir': '',
+    'step_frames': False,
     'step_trackmate': False,
     'step_tables': True,
     'step_filter': True,
@@ -113,7 +125,7 @@ def _module_default(mod, name):
     return getattr(mod, name)
 
 
-SECTIONS = [('trackmate', trackmate, TRACKMATE), ('filtration', filtration, FILTRATION), ('casa', casa, CASA), ('clustering', clustering, CLUSTERING)]
+SECTIONS = [('frames', frames, FRAMES), ('trackmate', trackmate, TRACKMATE), ('filtration', filtration, FILTRATION), ('casa', casa, CASA), ('clustering', clustering, CLUSTERING)]
 
 # значения по умолчанию снимаются при импорте, до того как приложение что-либо поменяет
 DEFAULTS = {sec: {item[0]: _module_default(mod, item[0]) for item in spec} for sec, mod, spec in SECTIONS}

@@ -2,7 +2,8 @@
 
 ```
 SpermPipeline
-  0 TRACKMATE      видео → ваша Fiji без окна: 8-bit → контраст → Gaussian → Find Maxima (Single Points)
+  00 КАДРЫ         .mpg → кадры (ffmpeg) → отрезки «начало-конец» + _rejected (GET SEQUENCES IN ORDER FROM VIDEO.py)
+  0 TRACKMATE      кадры → ваша Fiji без окна: 8-bit → контраст → Gaussian → Find Maxima (Single Points)
                    → TrackMate LoG + LAP → CSV спотов и треков (шаги Fiji-плагина Sperm_Tracking_Pipeline)
   1 ТАБЛИЦЫ        оформление экспортов TrackMate (.csv) — вместо макросов Excel
   2 ФИЛЬТРАЦИЯ     супер-фильтрация каждого отрезка: сшивка → разрез у границ → свап коллизий → фильтр по длине
@@ -23,6 +24,14 @@ SpermPipeline
 | Поставить пакеты и проверить | `install_and_selftest.bat` |
 | Собрать .exe без Python | `build_exe.bat` → `dist\SpermPipeline\SpermPipeline.exe` (или скачать готовый со страницы Actions репозитория) |
 | Самопроверка | `SpermPipeline.exe --selftest` / `python SpermPipeline.py --selftest` (синтетическое видео, весь путь) |
+
+## Шаг 00: нарезка видео
+
+Ваш `GET SEQUENCES IN ORDER FROM VIDEO.py` без изменения логики и порогов (вкладка «Нарезка»): ffmpeg режет
+`01.mpg` на `frame_00001.png …` в папку `1 video`, кадры с яркостью/разбросом/шумом вне порогов уходят в `_rejected`,
+хорошие куски длиннее `MIN_SEGMENT_LEN` (минус `TRIM` с краёв) — в папки `начало-конец`. Уже нарезанные видео заново
+не режутся, поэтому можно указать «Папку для кадров» = ваша `SEQUENCES IN ORDER`. Внимание: если поменять пороги,
+уже разложенное видео **не переразложится** — удалите его папку кадров, и оно нарежется заново.
 
 ## Шаг 0: TrackMate без окна
 
@@ -46,6 +55,7 @@ SpermPipeline
 
 ```
 <папка результатов>\
+  00 КАДРЫ\<n video>\<отрезок>\    кадры (если шаг 00 включён и «Папка для кадров» пуста); брак — в _rejected
   0 TRACKMATE\<видео>\            <отрезок>_spots.csv, <отрезок>_tracks.csv; _fiji_журнал.txt (если шаг 0 включён)
   настройки <дата>.json            все параметры прогона — чтобы результат можно было повторить
   _проверка отрезков.xlsx          по каждому отрезку: файлы, число треков, ошибки, исправлены ли столбцы

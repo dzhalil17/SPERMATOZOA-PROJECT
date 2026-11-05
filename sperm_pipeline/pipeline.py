@@ -1,7 +1,8 @@
 """
 Весь путь от видео до кластеров одной командой:
 
-  0 TRACKMATE      видео → Fiji без окна: 8-bit, контраст, Gaussian, Find Maxima, LoG + LAP → CSV  → trackmate.py
+  00 КАДРЫ        видео .mpg → кадры (ffmpeg) → отрезки + _rejected (GET SEQUENCES IN ORDER FROM VIDEO.py) → frames.py
+  0 TRACKMATE      кадры → Fiji без окна: 8-bit, контраст, Gaussian, Find Maxima, LoG + LAP → CSV  → trackmate.py
   1 ТАБЛИЦЫ        оформление экспортов TrackMate (замена макросов Excel)          → tables.py
   2 ФИЛЬТРАЦИЯ     супер-фильтрация каждого отрезка видео (*proc.xlsx + журнал)     → filtration.py
   3 СКЛЕЙКА        таблицы треков всех отрезков одного видео в одну (CONCATTING.py)
@@ -28,6 +29,7 @@ import pandas as pd
 from . import settings as S
 from . import tables
 
+DIR_FRAMES = '00 КАДРЫ'
 DIR_TRACKMATE = '0 TRACKMATE'
 DIR_TABLES = '1 ТАБЛИЦЫ'
 DIR_FILTER = '2 ФИЛЬТРАЦИЯ'
@@ -145,6 +147,23 @@ def run(cfg: dict, log=print, stop=lambda: False) -> Path:
     stamp = datetime.now().strftime('%Y-%m-%d %H-%M')
     (out_root / f'настройки {stamp}.json').write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
     S.apply(cfg)
+
+    # ---------- 00. нарезка видео на кадры и отрезки ----------
+    if g.get('step_frames'):
+        from . import frames
+        if not g.get('mpg_dir'):
+            raise ValueError('Шаг 00 включён, но не задана папка с видео (.mpg)')
+        frames_dir = Path(g['frames_dir']) if g.get('frames_dir') else out_root / DIR_FRAMES
+        log(f'\n=== 00. НАРЕЗКА ВИДЕО НА КАДРЫ (ffmpeg) И ОТРЕЗКИ ===')
+        log(f'Кадры: {frames_dir}')
+        try:
+            frames.run(g.get('ffmpeg_exe', ''), g['mpg_dir'], str(frames_dir), log, stop)
+        except KeyboardInterrupt:
+            raise Stopped()
+        g['videos_dir'] = str(frames_dir)
+        g['step_trackmate'] = True
+    if stop():
+        raise Stopped()
 
     # ---------- 0. TrackMate в Fiji без окна ----------
     raw_dir = g.get('raw_dir')

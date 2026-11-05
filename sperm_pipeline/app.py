@@ -62,7 +62,7 @@ class App(tk.Tk):
         nb = ttk.Notebook(self)
         nb.pack(fill='both', expand=True, padx=6, pady=6)
         self._run_tab(nb)
-        for sec, title, spec in [('trackmate', 'TrackMate', S.TRACKMATE),
+        for sec, title, spec in [('frames', 'Нарезка', S.FRAMES), ('trackmate', 'TrackMate', S.TRACKMATE),
                                  ('filtration', 'Супер-фильтрация', S.FILTRATION),
                                  ('casa', 'CASA-метрики', S.CASA),
                                  ('clustering', 'Кластеризация', S.CLUSTERING)]:
@@ -97,6 +97,16 @@ class App(tk.Tk):
                 row=r, column=0, columnspan=3, sticky='w', pady=(8, 2))
             r += 1
 
+        step_row('step_frames', '00. Нарезать видео (.mpg) на кадры через ffmpeg и разложить по отрезкам, брак — в _rejected')
+        self.e_mpg = folder_row('mpg_dir', 'Видео (.mpg):', 'папка с 01.mpg, 02.mpg … → кадры «1 video», «2 video» …')
+        ttk.Label(f, text='ffmpeg.exe:').grid(row=r, column=0, sticky='w', padx=(24, 4))
+        self.e_ffmpeg = ttk.Entry(f, textvariable=self.gv['ffmpeg_exe'], width=80)
+        self.e_ffmpeg.grid(row=r, column=1, sticky='we')
+        ttk.Button(f, text='…', width=3, command=lambda: self._pick_exe('ffmpeg_exe', 'ffmpeg.exe')).grid(
+            row=r, column=2, padx=2)
+        r += 1
+        self.e_frames = folder_row('frames_dir', 'Папка для кадров:',
+                                   'пусто — «00 КАДРЫ» в папке результатов; уже нарезанные видео заново не режутся')
         step_row('step_trackmate', '0. TrackMate в Fiji без окна: 8-bit → контраст → Gaussian → Find Maxima → LoG + LAP')
         self.e_videos = folder_row('videos_dir', 'Видео / кадры:', 'отрезок = папка с кадрами (png/jpg/tif) или файл .tif/.avi; папка над ними = видео; «_rejected» пропускается')
         ttk.Label(f, text='Fiji (ImageJ-win64.exe):').grid(row=r, column=0, sticky='w', padx=(24, 4))
@@ -146,10 +156,18 @@ class App(tk.Tk):
         self._sync()
 
     def _sync(self):
+        fr = self.gv['step_frames'].get()
+        if fr:
+            self.gv['step_trackmate'].set(True)       # кадры из шага 00 идут в шаг 0
+        for e in (self.e_mpg, self.e_ffmpeg, self.e_frames):
+            e.configure(state='normal' if fr else 'disabled')
+        if fr and not self.gv['ffmpeg_exe'].get():
+            from .frames import find_ffmpeg
+            self.gv['ffmpeg_exe'].set(find_ffmpeg())
         tm = self.gv['step_trackmate'].get()
         if tm:
             self.gv['step_tables'].set(True)          # CSV из шага 0 оформляет шаг 1
-        self.e_videos.configure(state='normal' if tm else 'disabled')
+        self.e_videos.configure(state='normal' if tm and not fr else 'disabled')
         self.e_fiji.configure(state='normal' if tm else 'disabled')
         if tm and not self.gv['fiji_exe'].get():
             from .trackmate import find_fiji
@@ -159,6 +177,11 @@ class App(tk.Tk):
         self.e_spots.configure(state='normal' if flt and not t else 'disabled')
         self.e_tracks.configure(state='normal' if flt and not t else 'disabled')
         self.e_casa.configure(state='normal' if cl and not flt else 'disabled')
+
+    def _pick_exe(self, key, title):
+        f = filedialog.askopenfilename(title=title, filetypes=[('Программа', '*.exe'), ('Все', '*.*')])
+        if f:
+            self.gv[key].set(os.path.normpath(f))
 
     def _pick_fiji(self):
         f = filedialog.askopenfilename(title='Fiji: ImageJ-win64.exe', filetypes=[('Fiji', '*.exe'), ('Все', '*.*')])

@@ -60,9 +60,14 @@ jobs:
           $exe = Get-ChildItem fiji -Recurse -Include ImageJ-win64.exe,fiji-windows-x64.exe,fiji-win64.exe | Select-Object -First 1
           Write-Host "Fiji launcher: $($exe.FullName)"
           "FIJI_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Step 0 → 5 on a synthetic video
-        run: python tools/fiji_check.py "$env:FIJI_EXE" "$env:RUNNER_TEMP\fijicheck"
+      - name: Step 00 → 5 on synthetic videos (.tif, PNG frames, .mpg via ffmpeg)
+        run: |
+          python -m pip install imageio-ffmpeg
+          $ff = python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"
+          python tools/fiji_check.py "$env:FIJI_EXE" "$env:RUNNER_TEMP\fijicheck" "$ff"
       - name: Fiji log
         if: always()
         shell: pwsh
-        run: Get-Content "$env:RUNNER_TEMP\fijicheck\out\0 TRACKMATE\_fiji_журнал.txt" -ErrorAction SilentlyContinue
+        run: |
+          Get-Content "$env:RUNNER_TEMP\fijicheck\out\0 TRACKMATE\_fiji_журнал.txt" -ErrorAction SilentlyContinue
+          Get-Content "$env:RUNNER_TEMP\fijicheck\out_mpg\0 TRACKMATE\_fiji_журнал.txt" -ErrorAction SilentlyContinue
