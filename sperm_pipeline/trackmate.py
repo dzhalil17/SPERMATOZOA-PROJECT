@@ -40,6 +40,8 @@ VIDEO_EXT = '.tif .tiff .avi'
 FIJI_CANDIDATES = [
     r'C:\Fiji.app\ImageJ-win64.exe', r'C:\Fiji.app\fiji-windows-x64.exe',
     r'C:\Program Files\Fiji.app\ImageJ-win64.exe', r'D:\Fiji.app\ImageJ-win64.exe',
+    r'D:\Fiji\ImageJ-win64.exe', r'D:\Fiji\Fiji.app\ImageJ-win64.exe',
+    r'D:\Fiji.app\fiji-windows-x64.exe', r'D:\Fiji\fiji-windows-x64.exe',
     r'~\Fiji.app\ImageJ-win64.exe', r'~\Desktop\Fiji.app\ImageJ-win64.exe', r'~\Downloads\Fiji.app\ImageJ-win64.exe',
     r'~\Fiji.app\fiji-windows-x64.exe', r'~\Desktop\Fiji.app\fiji-windows-x64.exe',
 ]
