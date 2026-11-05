@@ -98,7 +98,7 @@ class App(tk.Tk):
             r += 1
 
         step_row('step_trackmate', '0. TrackMate в Fiji без окна: 8-bit → контраст → Gaussian → Find Maxima → LoG + LAP')
-        self.e_videos = folder_row('videos_dir', 'Видео (.tif/.avi):', 'файл = отрезок (имя начинается с диапазона кадров), подпапка = видео')
+        self.e_videos = folder_row('videos_dir', 'Видео / кадры:', 'отрезок = папка с кадрами (png/jpg/tif) или файл .tif/.avi; папка над ними = видео; «_rejected» пропускается')
         ttk.Label(f, text='Fiji (ImageJ-win64.exe):').grid(row=r, column=0, sticky='w', padx=(24, 4))
         self.e_fiji = ttk.Entry(f, textvariable=self.gv['fiji_exe'], width=80)
         self.e_fiji.grid(row=r, column=1, sticky='we')

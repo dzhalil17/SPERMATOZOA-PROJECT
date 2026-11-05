@@ -1,6 +1,7 @@
 """Проверка шага 0 (TrackMate в Fiji без окна) на синтетическом видео, весь путь до кластеризации.
 python tools/fiji_check.py "C:\\Fiji.app\\ImageJ-win64.exe" [папка]
-Синтетика: 60 «сперматозоидов» (неподвижные, быстрые прямые, кружащие) на шумном фоне, 150 кадров."""
+Синтетика: 60 «сперматозоидов» (неподвижные, быстрые прямые, кружащие) на шумном фоне, 150 кадров.
+Два видео: «synthetic» — стек .tif, «synthetic_png» — папка кадров PNG (как SEQUENCES IN ORDER) + папка _rejected."""
 import sys
 import tempfile
 from pathlib import Path
@@ -33,6 +34,13 @@ def make_video(path: Path, n_frames=150, w=400, h=300, seed=1):
         frames.append(Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)))
     path.parent.mkdir(parents=True, exist_ok=True)
     frames[0].save(path, save_all=True, append_images=frames[1:])
+    seq = path.parent.parent / 'synthetic_png' / path.stem          # тот же отрезок как папка кадров
+    seq.mkdir(parents=True, exist_ok=True)
+    for t, fr in enumerate(frames):
+        fr.convert('RGB').save(seq / f'frame_{t:05d}.png')
+    rej = path.parent.parent / 'synthetic_png' / '_rejected'         # должна быть пропущена
+    rej.mkdir(exist_ok=True)
+    frames[0].save(rej / 'frame_99999.png')
 
 
 def main():
@@ -50,7 +58,9 @@ def main():
     import pandas as pd
     summ = pd.read_excel(root / 'out' / pipeline.DIR_CLUSTER / 'summary_all_videos.xlsx')
     print(summ.to_string(index=False))
-    assert summ['n_tracks'].iloc[0] >= 20, 'слишком мало треков'
+    assert set(summ['video']) == {'synthetic', 'synthetic_png'}, 'нет одного из видео'
+    assert (summ['n_tracks'] >= 20).all(), 'слишком мало треков'
+    assert not (root / 'out' / pipeline.DIR_TRACKMATE / 'synthetic_png' / '_rejected_spots.csv').exists()
     print('FIJI CHECK: OK')
 
 

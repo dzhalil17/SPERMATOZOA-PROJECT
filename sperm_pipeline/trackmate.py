@@ -8,14 +8,18 @@
   в том же виде, что кнопка «Export to CSV» в TrackMate (4 строки заголовка).
 Дальше эти CSV забирает шаг 1 (оформление таблиц).
 
-Видео: .tif/.tiff/.avi в папке (одно видео) или в её подпапках (подпапка = видео, файл = отрезок).
-Имя файла отрезка должно начинаться с диапазона кадров, например «1223-1622.tif».
+Отрезок, как в плагине: файл .tif/.tiff/.avi ИЛИ папка с кадрами (.png/.jpg/.bmp/.tif, открывается как
+File > Import > Image Sequence). Папка с отрезками = одно видео; папка с такими папками = несколько видео:
+  SEQUENCES IN ORDER\1 video\1230-1640\frame_01230.png …  → видео «1 video», отрезок «1230-1640».
+Папки, имя которых начинается с «_» (например, _rejected), пропускаются. Имя отрезка должно начинаться с
+диапазона кадров. .mpg/.mp4 Fiji без FFmpeg не читает — нужны папки с кадрами.
 Координаты принудительно в пикселях, время — в кадрах (как во всех ваших таблицах).
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -36,6 +40,8 @@ LINKING_MAX_DISTANCE = 40.0
 GAP_CLOSING_MAX_DISTANCE = 40.0
 MAX_FRAME_GAP = 20
 VIDEO_EXT = '.tif .tiff .avi'
+FRAME_EXT = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff'}   # кадры в папке-отрезке (как в плагине)
+_RANGE = re.compile(r'^\d+-\d+')
 
 FIJI_CANDIDATES = [
     r'C:\Fiji.app\ImageJ-win64.exe', r'C:\Fiji.app\fiji-windows-x64.exe',
@@ -62,14 +68,72 @@ def params() -> dict:
     return {k: globals()[k] for k in keys}
 
 
+def _is_frames(d: Path) -> bool:
+    """Папка с кадрами одного отрезка. Папка только с .tif — кадры, если её имя начинается с диапазона кадров
+    (иначе это папка-видео с отрезками-стеками .tif)."""
+    try:
+        fs = [p for p in d.iterdir() if p.is_file() and p.suffix.lower() in FRAME_EXT]
+    except OSError:
+        return False
+    if not fs:
+        return False
+    return any(p.suffix.lower() not in ('.tif', '.tiff') for p in fs) or bool(_RANGE.match(d.name))
+
+
+def _segments(d: Path, skipped: list, prefix=''):
+    vext = {e.lower() for e in VIDEO_EXT.split()}
+    segs = []
+    for p in sorted(d.iterdir(), key=lambda p: p.name):
+        if p.is_dir():
+            if p.name.startswith('_'):
+                skipped.append(prefix + p.name)
+            elif _is_frames(p):
+                segs.append((p.name, str(p), 'seq'))
+        elif p.is_file() and p.suffix.lower() in vext:
+            segs.append((p.stem, str(p), 'file'))
+    return segs
+
+
+def find_jobs(root: Path):
+    """[(видео, отрезок, путь, 'file'|'seq')], [пропущенные папки]"""
+    root = Path(root)
+    if not root.is_dir():
+        raise FileNotFoundError(f'Нет папки с видео: {root}')
+    skipped = []
+    if _is_frames(root) and not any(p.is_dir() for p in root.iterdir()):
+        return [(root.parent.name, root.name, str(root), 'seq')], skipped      # указали прямо папку-отрезок
+    segs = _segments(root, skipped)
+    if segs:
+        return [(root.name, *s) for s in segs], skipped
+    jobs = []
+    for v in sorted((p for p in root.iterdir() if p.is_dir() and not p.name.startswith('_')), key=lambda p: p.name):
+        jobs += [(v.name, *s) for s in _segments(v, skipped, v.name + '\\')]
+    if not jobs:
+        found = sorted({p.suffix.lower() or p.name for p in root.iterdir() if p.is_file()})
+        hint = ''
+        if any(e in ('.mpg', '.mpeg', '.mp4', '.mov', '.wmv', '.mkv') for e in found):
+            hint = ('\nFiji без FFmpeg не читает .mpg/.mp4. Укажите папку с последовательностями кадров '
+                    '(как во входе плагина: <видео>\\<отрезок>\\frame_*.png).')
+        raise FileNotFoundError(f'В папке {root} нет ни видео ({VIDEO_EXT}), ни папок с кадрами '
+                                f'({" ".join(sorted(FRAME_EXT))}). Найдено: {", ".join(found) or "пусто"}.{hint}')
+    return jobs, skipped
+
+
 def run(fiji_exe: str, videos_dir: Path, out_dir: Path, log=print, stop=lambda: False):
     fiji = fiji_exe or find_fiji()
     if not fiji or not Path(fiji).exists():
         raise FileNotFoundError('Не найдена Fiji: укажите путь к ImageJ-win64.exe на вкладке «Запуск»')
+    jobs, skipped = find_jobs(Path(videos_dir))
+    for v in dict.fromkeys(j[0] for j in jobs):
+        segs = [j for j in jobs if j[0] == v]
+        kinds = {'seq': 'папки с кадрами', 'file': 'файлы'}
+        log(f'Видео «{v}»: отрезков {len(segs)} ({", ".join(sorted({kinds[j[3]] for j in segs}))})')
+    if skipped:
+        log(f'Пропущены папки (имя начинается с «_»): {", ".join(skipped)}')
     out_dir.mkdir(parents=True, exist_ok=True)
     script = out_dir / '_fiji_trackmate.py'
     script.write_text(JYTHON_SCRIPT, encoding='utf-8')
-    job = {**params(), 'input_dir': str(videos_dir), 'output_dir': str(out_dir)}
+    job = {**params(), 'input_dir': str(videos_dir), 'output_dir': str(out_dir), 'jobs': [list(j) for j in jobs]}
     job_path = out_dir / '_trackmate_params.json'
     job_path.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding='utf-8')
     env = dict(os.environ, SPERMPIPELINE_PARAMS=str(job_path))
@@ -118,6 +182,7 @@ import jarray
 from java.lang import System, Math, Throwable
 from java.io import File, OutputStreamWriter, FileOutputStream
 from ij import IJ, ImagePlus, ImageStack
+from ij.plugin import FolderOpener
 from ij.process import StackConverter, ByteProcessor, ImageProcessor
 from ij.plugin.filter import GaussianBlur, MaximumFinder
 from fiji.plugin.trackmate import Model, Settings, TrackMate, Logger
@@ -284,47 +349,33 @@ def export(model, out_base):
     return len(spots), len(rows) - 4
 
 
-def videos(root):
-    ext = [e.lower() for e in P['VIDEO_EXT'].split()]
-    def files(d):
-        return sorted([os.path.join(d, f) for f in os.listdir(d)
-                       if os.path.isfile(os.path.join(d, f)) and os.path.splitext(f)[1].lower() in ext])
-    if files(root):
-        return [(os.path.basename(root.rstrip('/\\')), files(root))]
-    out = []
-    for d in sorted(os.listdir(root)):
-        full = os.path.join(root, d)
-        if os.path.isdir(full) and files(full):
-            out.append((d, files(full)))
-    return out
+def open_segment(path, kind):
+    if kind == 'seq':
+        return FolderOpener().openFolder(path)    # as the plugin: File > Import > Image Sequence
+    return IJ.openImage(path)
 
 
 try:
-    todo = videos(P['input_dir'])
-    if not todo:
-        say('ERR', P['input_dir'], 'no video files (%s)' % P['VIDEO_EXT'])
-    for name, fs in todo:
+    for name, stem, f, kind in P['jobs']:
         dst = os.path.join(P['output_dir'], name)
         if not os.path.isdir(dst):
             os.makedirs(dst)
-        for f in fs:
-            stem = os.path.splitext(os.path.basename(f))[0]
-            say('START', name, stem)
-            try:
-                imp = IJ.openImage(f)
-                if imp is None:
-                    raise Exception('Fiji could not open the file')
-                n = imp.getStackSize()
-                preprocess(imp)
-                mx = find_maxima(imp)
-                model = track(mx)
-                ns, nt = export(model, os.path.join(dst, stem))
-                say('OK', name, stem, n, ns, nt)
-                imp.close()
-                mx.close()
-            except (Exception, Throwable), e:
-                say('ERR', name, stem, e)
-                traceback.print_exc()
+        say('START', name, stem)
+        try:
+            imp = open_segment(f, kind)
+            if imp is None:
+                raise Exception('Fiji could not open ' + kind)
+            n = imp.getStackSize()
+            preprocess(imp)
+            mx = find_maxima(imp)
+            model = track(mx)
+            ns, nt = export(model, os.path.join(dst, stem))
+            say('OK', name, stem, n, ns, nt)
+            imp.close()
+            mx.close()
+        except (Exception, Throwable), e:
+            say('ERR', name, stem, e)
+            traceback.print_exc()
 except (Exception, Throwable), e:
     say('ERR', 'all', e)
     traceback.print_exc()
