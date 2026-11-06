@@ -178,6 +178,24 @@ def _split(jobs, n):
     return groups, (max(needs) if needs else None)
 
 
+def _script_path(out_dir: Path, fiji: str) -> Path:
+    """Куда положить скрипт для Fiji. Лаунчер ImageJ-win64.exe теряет аргумент --run, если в пути есть кириллица
+    («Ignoring invalid argument: --run»), поэтому скрипт кладётся в папку с путём только из латиницы."""
+    import tempfile
+    for d in (out_dir, Path(tempfile.gettempdir()) / 'SpermPipeline', Path(fiji).parent / 'SpermPipeline',
+              Path(os.environ.get('PUBLIC', r'C:\Users\Public')) / 'SpermPipeline'):
+        if str(d).isascii():
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                f = d / f'_fiji_trackmate_{os.getpid()}.py'
+                f.write_text('', encoding='utf-8')
+                return f
+            except OSError:
+                continue
+    raise RuntimeError('Нет папки с путём только из латиницы для скрипта Fiji (лаунчер Fiji не понимает кириллицу '
+                       'в пути скрипта). Укажите папку результатов без русских букв.')
+
+
 def run(fiji_exe: str, videos_dir, out_dir: Path, log=print, stop=lambda: False, raise_if_none=True,
         n_procs: int = 1, dest=None, rename=None) -> dict:
     """→ {'ok': [(видео, отрезок, кадров, спотов, треков)], 'bad': [(видео, отрезок, ошибка)], 'already': [...],
@@ -241,7 +259,7 @@ def run(fiji_exe: str, videos_dir, out_dir: Path, log=print, stop=lambda: False,
         log(f'Видео «{v}»: отрезков {len(segs)} ({", ".join(sorted({kinds[j[3]] for j in segs}))})')
     if skipped:
         log(f'Пропущены папки (имя начинается с «_»): {", ".join(skipped)}')
-    script = out_dir / '_fiji_trackmate.py'
+    script = _script_path(out_dir, fiji)
     script.write_text(JYTHON_SCRIPT, encoding='utf-8')
     for f in list(out_dir.glob('_progress*.txt')) + list(out_dir.glob('_trackmate_params*.json')):
         f.unlink()
@@ -322,6 +340,10 @@ def run(fiji_exe: str, videos_dir, out_dir: Path, log=print, stop=lambda: False,
                 p['proc'].wait()
             p['flog'].close()
     codes = [p['proc'].poll() for p in procs]
+    try:
+        script.unlink()
+    except OSError:
+        pass
     log(f'TrackMate: готово {ok}, с ошибкой {bad}. Журнал Fiji: {out_dir / "_fiji_журнал.txt"}'
         + (f' (и _2 … _{n})' if n > 1 else ''))
     if stop():
