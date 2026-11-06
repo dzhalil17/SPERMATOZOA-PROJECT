@@ -158,13 +158,13 @@ def main(video_dir, output_dir):
     for k, video in enumerate(videos, 1):
         if _STOP():                                    # [SpermPipeline] кнопка «Остановить»
             raise KeyboardInterrupt
-        out_dir = os.path.join(output_dir, folder_name(video))
+        out_dir = _DEST(video) if _DEST else os.path.join(output_dir, folder_name(video))   # [SpermPipeline]
         # уже нарезанные видео не трогаем, чтобы не затереть разложенные кадры
         if os.path.isdir(out_dir) and os.listdir(out_dir):
-            print(f"[{k}/{len(videos)}] {video} — папка {os.path.basename(out_dir)} уже есть, не нарезаю")
+            print(f"[{k}/{len(videos)}] {video} — папка {out_dir} уже есть, не нарезаю")
             skipped.append(video)
             continue
-        print(f"[{k}/{len(videos)}] {video} -> {os.path.basename(out_dir)}")
+        print(f"[{k}/{len(videos)}] {video} -> {out_dir}")
         if extract(os.path.join(video_dir, video), out_dir):
             done.append(video)
         else:
@@ -178,9 +178,9 @@ def main(video_dir, output_dir):
         for video in done + skipped:
             if _STOP():                                # [SpermPipeline]
                 raise KeyboardInterrupt
-            out_dir = os.path.join(output_dir, folder_name(video))
+            out_dir = _DEST(video) if _DEST else os.path.join(output_dir, folder_name(video))   # [SpermPipeline]
             if list_frames(out_dir):
-                print(f"\n=== {folder_name(video)} ===")
+                print(f"\n=== {os.path.splitext(video)[0] if _DEST else folder_name(video)} ===")
                 split_folder(out_dir, DRY_RUN)
 
     print("\n✅ Готово!")
@@ -190,6 +190,7 @@ def main(video_dir, output_dir):
 # [SpermPipeline] вызов из приложения
 # =============================================================================
 _STOP = lambda: False   # noqa: E731
+_DEST = None            # видео → папка его кадров (приложение кладёт кадры в папку видео с именем как у .mpg)
 FFMPEG_DEFAULT = FFMPEG
 
 
@@ -219,15 +220,23 @@ class _LineLog:
             self.buf = ""
 
 
-def run(ffmpeg_exe, video_dir, output_dir, log=print, stop=lambda: False):
-    global FFMPEG, _STOP
+def list_videos(video_dir):
+    """Видео в папке в том же порядке, что и main()."""
+    return sorted((f for f in os.listdir(video_dir)
+                   if os.path.isfile(os.path.join(video_dir, f)) and f.lower().endswith(VIDEO_EXTENSIONS)),
+                  key=natural_key)
+
+
+def run(ffmpeg_exe, video_dir, output_dir, log=print, stop=lambda: False, dest=None):
+    """dest(имя файла видео) → папка его кадров; без dest — как в исходном скрипте: output_dir\\«1 video»."""
+    global FFMPEG, _STOP, _DEST
     import contextlib
     exe = find_ffmpeg(ffmpeg_exe)
     if not exe:
         raise FileNotFoundError("Не найден ffmpeg.exe: укажите путь на вкладке «Запуск»")
     if not os.path.isdir(video_dir):
         raise FileNotFoundError(f"Нет папки с видео: {video_dir}")
-    FFMPEG, _STOP = exe, stop
+    FFMPEG, _STOP, _DEST = exe, stop, dest
     os.makedirs(output_dir, exist_ok=True)
     log(f"ffmpeg: {exe}")
     real = sys.stdout

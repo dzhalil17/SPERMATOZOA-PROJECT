@@ -152,7 +152,7 @@ def _png_size(path: Path):
 
 def _job_info(job):
     """→ (вес для раздачи по процессам — байты на диске, оценка памяти Fiji на этот отрезок в ГБ или None)."""
-    _, _, path, kind = job
+    path, kind = job[2], job[3]
     p = Path(path)
     if kind == 'file':
         return p.stat().st_size, None
@@ -178,37 +178,61 @@ def _split(jobs, n):
     return groups, (max(needs) if needs else None)
 
 
-def run(fiji_exe: str, videos_dir: Path, out_dir: Path, log=print, stop=lambda: False, raise_if_none=True,
-        n_procs: int = 1) -> dict:
-    """→ {'ok': [(видео, отрезок, кадров, спотов, треков)], 'bad': [(видео, отрезок, ошибка)], 'already': [...]}.
-    Отрезки, у которых уже есть оба CSV, не пересчитываются (продолжение после сбоя)."""
+def run(fiji_exe: str, videos_dir, out_dir: Path, log=print, stop=lambda: False, raise_if_none=True,
+        n_procs: int = 1, dest=None, rename=None) -> dict:
+    """→ {'ok': [(видео, отрезок, кадров, спотов, треков)], 'bad': [(видео, отрезок, ошибка)], 'already': [...],
+          'videos': {видео: папка его CSV}}.
+    videos_dir — папка с видео/отрезками или список [(имя видео, папка с его отрезками)].
+    dest(видео) — куда класть CSV этого видео (по умолчанию out_dir\\видео); rename — имя видео по имени папки.
+    В out_dir — служебное: скрипт Fiji, журналы. Отрезки, у которых уже есть оба CSV, посчитанные с теми же
+    параметрами, не пересчитываются (продолжение после сбоя)."""
     fiji = fiji_exe or find_fiji()
     if not fiji or not Path(fiji).exists():
         raise FileNotFoundError('Не найдена Fiji: укажите путь к ImageJ-win64.exe на вкладке «Запуск»')
-    jobs, skipped = find_jobs(Path(videos_dir))
     out_dir = Path(out_dir)
+    dest = dest or (lambda v: out_dir / v)
+    if isinstance(videos_dir, (list, tuple)):
+        jobs, skipped = [], []
+        for name, src in videos_dir:
+            j, sk = find_jobs(Path(src))
+            jobs += [(name, *x[1:]) for x in j]
+            skipped += sk
+    else:
+        jobs, skipped = find_jobs(Path(videos_dir))
+        if rename:
+            jobs = [(rename(j[0]), *j[1:]) for j in jobs]
+    jobs = [(*j, str(dest(j[0]))) for j in jobs]
     out_dir.mkdir(parents=True, exist_ok=True)
-    # продолжение после сбоя — только если параметры те же, что у уже посчитанных CSV
-    pfile = out_dir / '_параметры TrackMate.json'
+    # продолжение после сбоя — только если параметры те же, что у уже посчитанных CSV (файл в папке каждого видео)
     cur = {k: v for k, v in params().items() if k != 'VIDEO_EXT'}
-    try:
-        same = json.loads(pfile.read_text(encoding='utf-8')) == cur
-    except Exception:
-        same = False
-    already = [j for j in jobs if (out_dir / j[0] / f'{j[1]}_spots.csv').exists()
-               and (out_dir / j[0] / f'{j[1]}_tracks.csv').exists()] if same else []
-    if not same:
-        old = [f for j in jobs for f in (out_dir / j[0] / f'{j[1]}_spots.csv', out_dir / j[0] / f'{j[1]}_tracks.csv')
-               if f.exists()]
-        if old:
-            log(f'Параметры TrackMate не те, что у прежних CSV — удаляю {len(old)} старых CSV и считаю заново')
-            for f in old:
-                f.unlink()
-    pfile.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding='utf-8')
+    vids = list(dict.fromkeys(j[0] for j in jobs))
+    already, n_del = [], 0
+    for v in vids:
+        vj = [j for j in jobs if j[0] == v]
+        vdst = Path(vj[0][4])
+        vdst.mkdir(parents=True, exist_ok=True)
+        pfile = vdst / '_параметры TrackMate.json'
+        try:
+            same = json.loads(pfile.read_text(encoding='utf-8')) == cur
+        except Exception:
+            same = False
+        csvs = [(j, Path(j[4]) / f'{j[1]}_spots.csv', Path(j[4]) / f'{j[1]}_tracks.csv') for j in vj]
+        if same:
+            already += [j for j, a, b in csvs if a.exists() and b.exists()]
+        else:
+            for _, a, b in csvs:
+                for f in (a, b):
+                    if f.exists():
+                        f.unlink()
+                        n_del += 1
+        pfile.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding='utf-8')
+    if n_del:
+        log(f'Параметры TrackMate не те, что у прежних CSV — удалил {n_del} старых CSV, считаю заново')
     if already:
         log(f'Уже посчитаны раньше (есть оба CSV), пропускаю: {len(already)} из {len(jobs)} отрезков')
         jobs = [j for j in jobs if j not in already]
-    res = {'ok': [], 'bad': [], 'already': [(j[0], j[1]) for j in already]}
+    res = {'ok': [], 'bad': [], 'already': [(j[0], j[1]) for j in already],
+           'videos': {v: dest(v) for v in vids}}
     if not jobs:
         return res
     for v in dict.fromkeys(j[0] for j in jobs):
@@ -497,8 +521,7 @@ def open_segment(path, kind):
 
 
 try:
-    for name, stem, f, kind in P['jobs']:
-        dst = os.path.join(P['output_dir'], name)
+    for name, stem, f, kind, dst in P['jobs']:
         if not os.path.isdir(dst):
             os.makedirs(dst)
         say('START', name, stem)

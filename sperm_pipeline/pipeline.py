@@ -1,4 +1,4 @@
-"""
+r"""
 Весь путь от видео до кластеров одной командой:
 
   00 КАДРЫ        видео .mpg → кадры (ffmpeg) → отрезки + _rejected (GET SEQUENCES IN ORDER FROM VIDEO.py) → frames.py
@@ -11,6 +11,11 @@
 
 Шаги 2–4 идут за один проход по каждому отрезку: фильтрация сразу отдаёт точки итоговых треков,
 и метрики считаются по ним (раньше casa_metrics.py ради этого заново прогонял фильтрацию).
+
+Раскладка результатов — по папке на видео, имя как у файла видео (01.mpg → «01»):
+  <папка результатов>\01\00 КАДРЫ, 0 TRACKMATE, 1 ТАБЛИЦЫ, 2 ФИЛЬТРАЦИЯ, 3 СКЛЕЙКА, 4 CASA TRACKS, 4 CASA SPOTS,
+                        5 КЛАСТЕРИЗАЦИЯ (график и итог этого видео)
+  <папка результатов>\_ВСЕ ВИДЕО\  сводка по всем видео, проверка отрезков, настройки прогона, журналы Fiji
 """
 from __future__ import annotations
 
@@ -37,6 +42,8 @@ DIR_CONCAT = '3 СКЛЕЙКА'
 DIR_CASA_TRACKS = '4 CASA TRACKS'
 DIR_CASA_SPOTS = '4 CASA SPOTS'
 DIR_CLUSTER = '5 КЛАСТЕРИЗАЦИЯ'
+DIR_ALL = '_ВСЕ ВИДЕО'
+SUMMARY = 'summary_all_videos.xlsx'
 
 
 class Stopped(Exception):
@@ -143,82 +150,126 @@ def run(cfg: dict, log=print, stop=lambda: False) -> Path:
     out_root = Path(g['output_dir'])
     if not g['output_dir']:
         raise ValueError('Не задана папка результатов')
-    out_root.mkdir(parents=True, exist_ok=True)
+    all_dir = out_root / DIR_ALL
+    all_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime('%Y-%m-%d %H-%M')
-    (out_root / f'настройки {stamp}.json').write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
+    (all_dir / f'настройки {stamp}.json').write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
     S.apply(cfg)
 
+    def vdir(v: str) -> Path:                  # папка видео в папке результатов
+        return out_root / v
+
+    # имя видео = имя файла .mpg (01.mpg → «01»); папки кадров «1 video» из старого скрипта нарезки — тоже «01»
+    rename = {}
+    if g.get('mpg_dir') and Path(g['mpg_dir']).is_dir():
+        from . import frames
+        for f in frames.list_videos(g['mpg_dir']):
+            rename[frames.folder_name(f)] = Path(f).stem
+
+    def name_of(folder: str) -> str:
+        return rename.get(folder, folder)
+
     # ---------- 00. нарезка видео на кадры и отрезки ----------
+    tm_src = None
     if g.get('step_frames'):
         from . import frames
         if not g.get('mpg_dir'):
             raise ValueError('Шаг 00 включён, но не задана папка с видео (.mpg)')
-        frames_dir = Path(g['frames_dir']) if g.get('frames_dir') else out_root / DIR_FRAMES
+        custom = Path(g['frames_dir']) if g.get('frames_dir') else None
+
+        def frames_of(video_file: str) -> Path:
+            v = Path(video_file).stem
+            return custom / v if custom else vdir(v) / DIR_FRAMES
         log(f'\n=== 00. НАРЕЗКА ВИДЕО НА КАДРЫ (ffmpeg) И ОТРЕЗКИ ===')
-        log(f'Кадры: {frames_dir}')
+        log(f'Кадры: {custom or ("<папка результатов>" + chr(92) + "<видео>" + chr(92) + DIR_FRAMES)}')
         try:
-            frames.run(g.get('ffmpeg_exe', ''), g['mpg_dir'], str(frames_dir), log, stop)
+            frames.run(g.get('ffmpeg_exe', ''), g['mpg_dir'], str(out_root), log, stop,
+                       dest=lambda f: str(frames_of(f)))
         except KeyboardInterrupt:
             raise Stopped()
-        g['videos_dir'] = str(frames_dir)
+        tm_src = [(Path(f).stem, frames_of(f)) for f in frames.list_videos(g['mpg_dir'])
+                  if frames_of(f).is_dir()]
         g['step_trackmate'] = True
     if stop():
         raise Stopped()
 
     # ---------- 0. TrackMate в Fiji без окна ----------
-    raw_dir = g.get('raw_dir')
+    raw_videos = None                          # [(видео, папка с CSV TrackMate)]
     if g.get('step_trackmate'):
         from . import trackmate
-        if not g.get('videos_dir'):
-            raise ValueError('Шаг 0 включён, но не задана папка с видео')
+        if tm_src is None:
+            if not g.get('videos_dir'):
+                raise ValueError('Шаг 0 включён, но не задана папка с видео')
+            tm_src = Path(g['videos_dir'])
         log(f'\n=== 0. TRACKMATE (Fiji без окна) ===')
-        trackmate.run(g.get('fiji_exe', ''), Path(g['videos_dir']), out_root / DIR_TRACKMATE, log, stop,
-                      n_procs=int(g.get('fiji_procs') or 1))
-        raw_dir = str(out_root / DIR_TRACKMATE)
+        res = trackmate.run(g.get('fiji_exe', ''), tm_src, all_dir / 'журналы Fiji', log, stop,
+                            n_procs=int(g.get('fiji_procs') or 1), dest=lambda v: vdir(v) / DIR_TRACKMATE,
+                            rename=name_of)
+        raw_videos = list(res['videos'].items())
         g['step_tables'] = True
+    elif g.get('step_tables'):
+        if not g.get('raw_dir'):
+            raise ValueError('Шаг 1 включён, но не задана папка с экспортами TrackMate (.csv)')
+        raw_videos = [(name_of(d.name), d) for d in tables.video_dirs(Path(g['raw_dir']), tables.is_raw)]
+        if not raw_videos:
+            raise FileNotFoundError(f'В {g["raw_dir"]} нет файлов .csv/.xls/.xlsx')
     if stop():
         raise Stopped()
 
     # ---------- 1. оформление таблиц ----------
-    spots_root = Path(g['spots_dir']) if g.get('spots_dir') else None
-    tracks_root = Path(g['tracks_dir']) if g.get('tracks_dir') else None
+    videos = None                              # [(видео, [(отрезок, споты, треки)])]
     if g['step_tables']:
-        if not raw_dir:
-            raise ValueError('Шаг 1 включён, но не задана папка с экспортами TrackMate (.csv)')
         log(f'\n=== 1. ОФОРМЛЕНИЕ ТАБЛИЦ (вместо макросов Excel) ===')
-        tables.format_tree(Path(raw_dir), out_root / DIR_TABLES, log)
-        spots_root = tracks_root = out_root / DIR_TABLES
+        videos = []
+        for v, src in raw_videos:
+            log(f'Видео «{v}»:')
+            dst = vdir(v) / DIR_TABLES
+            for f in sorted(Path(src).iterdir()):
+                if f.is_file() and tables.is_raw(f):
+                    try:
+                        tables.format_file(f, dst, log)
+                    except Exception as e:
+                        log(f'  ОШИБКА {f.name}: {e!r}')
+            if dst.is_dir():
+                videos += [(v, segs) for _, segs in find_videos(dst, None)]
+    elif g.get('spots_dir'):
+        tracks_root = Path(g['tracks_dir']) if g.get('tracks_dir') else None
+        videos = [(name_of(v), segs) for v, segs in find_videos(Path(g['spots_dir']), tracks_root)]
     if stop():
         raise Stopped()
 
     # ---------- 2–4. фильтрация + склейка + CASA ----------
-    casa_dir = Path(g['casa_dir']) if g.get('casa_dir') else None
+    casa_files = None                          # [файл CASA TRACKS видео]; имя файла = имя видео
     if g['step_filter']:
-        if spots_root is None:
+        if videos is None:
             raise ValueError('Шаг 2 включён, но не задана папка со спотами (*_allspots.xlsx)')
-        casa_dir = filter_and_casa(cfg, spots_root, tracks_root, out_root, log, stop)
+        if not videos:
+            raise FileNotFoundError('Не найдено ни одного файла *spots*.xlsx')
+        casa_files = filter_and_casa(cfg, videos, out_root, log, stop)
+    elif g.get('casa_dir'):
+        from . import clustering
+        casa_files = sorted(f for f in Path(g['casa_dir']).glob(clustering.FILE_PATTERN)
+                            if not f.name.startswith('~$'))
     if stop():
         raise Stopped()
 
     # ---------- 5. кластеризация ----------
     if g['step_cluster']:
-        if casa_dir is None:
+        if not casa_files:
             raise ValueError('Шаг 5 включён, но нет входа: включите шаг 2 или задайте папку CASA TRACKS')
-        cluster(cfg, casa_dir, out_root / DIR_CLUSTER, log)
-    log(f'\nГОТОВО. Результаты: {out_root}')
+        cluster(cfg, casa_files, out_root, log)
+    log(f'\nГОТОВО. Результаты: {out_root} (папка на каждое видео; сводка — «{DIR_ALL}»)')
     return out_root
 
 
-def filter_and_casa(cfg, spots_root: Path, tracks_root, out_root: Path, log, stop) -> Path:
+def filter_and_casa(cfg, videos: list, out_root: Path, log, stop) -> list:
+    """videos = [(видео, [(отрезок, споты, треки)])]. Пишет всё в <out_root>\\<видео>\\... → [файлы CASA TRACKS]."""
     from . import casa, filtration
-    videos = find_videos(spots_root, tracks_root)
-    if not videos:
-        raise FileNotFoundError(f'В {spots_root} нет файлов *spots*.xlsx')
     n_seg = sum(len(s) for _, s in videos)
     log(f'\n=== 2–4. СУПЕР-ФИЛЬТРАЦИЯ, СКЛЕЙКА, CASA-МЕТРИКИ ===')
-    log(f'Видео: {len(videos)}, отрезков: {n_seg}. Журнал каждого отрезка — в «{DIR_FILTER}\\<видео>\\<отрезок>_журнал.txt»')
+    log(f'Видео: {len(videos)}, отрезков: {n_seg}. Журнал каждого отрезка — в «<видео>\\{DIR_FILTER}\\<отрезок>_журнал.txt»')
     jobs = [{'video': v, 'seg': seg, 'spots': str(sp), 'tracks': str(tr), 'settings': cfg,
-             'out_dir': str(out_root / DIR_FILTER / v)} for v, segs in videos for seg, sp, tr in segs]
+             'out_dir': str(out_root / v / DIR_FILTER)} for v, segs in videos for seg, sp, tr in segs]
     results = {}
     workers = max(1, int(cfg['general'].get('n_workers') or 1))
     with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -234,11 +285,9 @@ def filter_and_casa(cfg, spots_root: Path, tracks_root, out_root: Path, log, sto
                     x.cancel()
                 raise Stopped()
 
-    concat_dir, tr_dir, sp_dir = out_root / DIR_CONCAT, out_root / DIR_CASA_TRACKS, out_root / DIR_CASA_SPOTS
-    for d in (concat_dir, tr_dir, sp_dir):
-        d.mkdir(parents=True, exist_ok=True)
-    check = []
+    check, out = [], []
     for v, segs in videos:
+        concat_dir, tr_dir, sp_dir = (out_root / v / d for d in (DIR_CONCAT, DIR_CASA_TRACKS, DIR_CASA_SPOTS))
         rows, mets, spts = [], [], []
         for seg, sp, tr in segs:
             r = results[(v, seg)]
@@ -256,28 +305,50 @@ def filter_and_casa(cfg, spots_root: Path, tracks_root, out_root: Path, log, sto
         if not rows:
             log(f'  {v}: нет ни одного обработанного отрезка — пропуск')
             continue
+        for d in (concat_dir, tr_dir, sp_dir):
+            d.mkdir(parents=True, exist_ok=True)
         tracks = pd.concat(rows, ignore_index=True)
         tracks.drop(columns='SEGMENT').to_excel(concat_dir / f'{v}.xlsx', sheet_name='Tracks', index=False)
         met = casa.to_units(pd.concat(mets, ignore_index=True))
         tracks.merge(met, on=['SEGMENT', 'TRACK_ID'], how='left').to_excel(tr_dir / f'{v}.xlsx', index=False)
         pd.concat(spts, ignore_index=True)[['SEGMENT', 'TRACK_ID', 'FRAME', 'POSITION_X', 'POSITION_Y']] \
             .to_excel(sp_dir / f'{v} spots of final tracks.xlsx', index=False)
-        log(f'  {v}: треков {len(tracks)} → «{DIR_CASA_TRACKS}\\{v}.xlsx»')
-    pd.DataFrame(check).to_excel(out_root / '_проверка отрезков.xlsx', index=False)
+        out.append(tr_dir / f'{v}.xlsx')
+        log(f'  {v}: треков {len(tracks)} → «{v}\\{DIR_CASA_TRACKS}\\{v}.xlsx»')
+    pd.DataFrame(check).to_excel(out_root / DIR_ALL / '_проверка отрезков.xlsx', index=False)
     bad = [c for c in check if not c['ok']]
     if bad:
-        log(f'ВНИМАНИЕ: {len(bad)} отрезков с ошибкой — см. «_проверка отрезков.xlsx» и журналы')
-    return tr_dir
+        log(f'ВНИМАНИЕ: {len(bad)} отрезков с ошибкой — см. «{DIR_ALL}\\_проверка отрезков.xlsx» и журналы')
+    return out
 
 
-def cluster(cfg, casa_dir: Path, out_dir: Path, log):
+def cluster(cfg, casa_files: list, out_root: Path, log):
+    """Кластеризация (hdbscan casa 2d.py) по всем видео разом: сводка — в «_ВСЕ ВИДЕО», график и итог
+    каждого видео — в «<видео>\\5 КЛАСТЕРИЗАЦИЯ»."""
     from . import clustering
     log(f'\n=== 5. КЛАСТЕРИЗАЦИЯ (HDBSCAN) ===')
-    log(f'Вход: {casa_dir}')
+    log(f'Видео: {len(casa_files)}')
     S.apply(cfg)
-    clustering.INPUT_DIR = str(casa_dir)
-    clustering.OUTPUT_DIR = str(out_dir)
+    all_dir = out_root / DIR_ALL
+    clustering.FILES = [str(f) for f in casa_files]
+    clustering.OUTPUT_DIR = str(all_dir)
+    clustering.PLOT_DIR = lambda v: out_root / v / DIR_CLUSTER
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        clustering.main()
+    try:
+        with contextlib.redirect_stdout(buf):
+            clustering.main()
+    finally:
+        clustering.FILES = clustering.PLOT_DIR = None
     log(buf.getvalue().rstrip())
+    # итог каждого видео — рядом с его графиком
+    book = pd.read_excel(all_dir / SUMMARY, sheet_name=None)
+    lab_path = all_dir / 'tracks_labeled.xlsx'
+    labeled = pd.read_excel(lab_path) if lab_path.exists() else None
+    for v in book['per_video']['video'].astype(str):
+        d = out_root / v / DIR_CLUSTER
+        d.mkdir(parents=True, exist_ok=True)
+        with pd.ExcelWriter(d / f'итог {v}.xlsx') as xw:
+            for sheet, df in book.items():
+                (df[df['video'].astype(str) == v] if 'video' in df else df).to_excel(xw, sheet_name=sheet, index=False)
+            if labeled is not None:
+                labeled[labeled['video'].astype(str) == v].to_excel(xw, sheet_name='tracks', index=False)

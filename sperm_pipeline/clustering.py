@@ -93,8 +93,15 @@ SAVE_TRACK_LABELS = True
 # 1. ЗАГРУЗКА
 # =============================================================================
 
+FILES = None      # [SpermPipeline] список файлов CASA вместо INPUT_DIR
+PLOT_DIR = None   # [SpermPipeline] видео → папка для его графика
+
+
 def load_videos() -> dict:
-    files = sorted(f for f in Path(INPUT_DIR).glob(FILE_PATTERN) if not f.name.startswith('~$'))
+    if FILES:                                   # [SpermPipeline] явный список файлов (по одному на видео)
+        files = [Path(f) for f in FILES]
+    else:
+        files = sorted(f for f in Path(INPUT_DIR).glob(FILE_PATTERN) if not f.name.startswith('~$'))
     if not files:
         raise FileNotFoundError(f"Нет файлов {FILE_PATTERN} в {INPUT_DIR}")
     videos = {}
@@ -347,7 +354,9 @@ def main():
         w, l = summarize(v, videos[v], labels, params)
         wide_rows.append(w); long_rows.extend(l)
         if SAVE_PLOTS:
-            plot(v, videos[v], labels, out_dir)
+            pdir = Path(PLOT_DIR(v)) if PLOT_DIR else out_dir          # [SpermPipeline] график — в папку видео
+            pdir.mkdir(parents=True, exist_ok=True)
+            plot(v, videos[v], labels, pdir)
         if SAVE_TRACK_LABELS:
             tracks.append(videos[v].assign(video=v, cluster=[name_of(k) for k in labels]))
 

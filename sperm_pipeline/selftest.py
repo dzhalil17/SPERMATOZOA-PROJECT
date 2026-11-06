@@ -46,7 +46,10 @@ def run(log=print) -> bool:
     cfg['general'].update(spots_dir=str(tmp / 'in'), output_dir=str(tmp / 'out'), step_tables=False,
                           step_filter=True, step_cluster=True, n_workers=1)
     pipeline.run(cfg, log=log)
-    summ = pd.read_excel(tmp / 'out' / pipeline.DIR_CLUSTER / 'summary_all_videos.xlsx')
-    ok = len(summ) == 1 and summ['n_tracks'].iloc[0] > 0
+    summ = pd.read_excel(tmp / 'out' / pipeline.DIR_ALL / pipeline.SUMMARY)
+    v = tmp / 'out' / 'synthetic'                      # папка видео: всё про него — в ней
+    ok = (len(summ) == 1 and summ['n_tracks'].iloc[0] > 0
+          and (v / pipeline.DIR_CASA_TRACKS / 'synthetic.xlsx').exists()
+          and (v / pipeline.DIR_CLUSTER / 'итог synthetic.xlsx').exists())
     log(f'\nСАМОПРОВЕРКА: {"OK" if ok else "ОШИБКА"} — папка {tmp}')
     return ok

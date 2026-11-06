@@ -79,15 +79,19 @@ def check_from_mpg(fiji: str, ffmpeg: str, root: Path):
     cfg['general'].update(step_frames=True, mpg_dir=str(root / 'mpg'), ffmpeg_exe=ffmpeg, fiji_exe=fiji,
                           output_dir=str(root / 'out_mpg'), n_workers=2)
     pipeline.run(cfg, log=lambda m: print(m, flush=True))
-    vdir = root / 'out_mpg' / pipeline.DIR_FRAMES / '1 video'
+    vdir = root / 'out_mpg' / '01' / pipeline.DIR_FRAMES          # 01.mpg → папка «01»
     segs = sorted(p.name for p in vdir.iterdir() if p.is_dir() and not p.name.startswith('_'))
     n_rej = len(list((vdir / '_rejected').glob('*.png')))
     print('отрезки:', segs, ' в _rejected:', n_rej)
     assert len(segs) == 2, 'ожидалось 2 отрезка'
     import pandas as pd
-    summ = pd.read_excel(root / 'out_mpg' / pipeline.DIR_CLUSTER / 'summary_all_videos.xlsx')
+    summ = pd.read_excel(root / 'out_mpg' / pipeline.DIR_ALL / pipeline.SUMMARY)
     print(summ.to_string(index=False))
-    assert list(summ['video']) == ['1 video'] and summ['n_tracks'].iloc[0] >= 20
+    assert list(summ['video'].astype(str)) == ['01'] and summ['n_tracks'].iloc[0] >= 20
+    for d in (pipeline.DIR_TRACKMATE, pipeline.DIR_TABLES, pipeline.DIR_FILTER, pipeline.DIR_CASA_TRACKS):
+        assert (root / 'out_mpg' / '01' / d).is_dir(), f'нет папки 01\\{d}'
+    assert (root / 'out_mpg' / '01' / pipeline.DIR_CLUSTER / 'итог 01.xlsx').exists()
+    print('папки результатов:', sorted(p.name for p in (root / 'out_mpg').iterdir()))
 
 
 def same_tracking(spots_a: Path, spots_b: Path) -> bool:
@@ -142,20 +146,23 @@ def main():
                           output_dir=str(root / 'out'), step_tables=True, step_filter=True, step_cluster=True,
                           n_workers=2, fiji_procs=2)               # 2 отрезка → 2 Fiji одновременно
     pipeline.run(cfg, log=lambda m: print(m, flush=True))
-    assert (root / 'out' / pipeline.DIR_TRACKMATE / '_fiji_журнал_2.txt').exists(), 'вторая Fiji не запускалась'
+    assert (root / 'out' / pipeline.DIR_ALL / 'журналы Fiji' / '_fiji_журнал_2.txt').exists(), 'вторая Fiji не запускалась'
     import pandas as pd
-    summ = pd.read_excel(root / 'out' / pipeline.DIR_CLUSTER / 'summary_all_videos.xlsx')
+    summ = pd.read_excel(root / 'out' / pipeline.DIR_ALL / pipeline.SUMMARY)
     print(summ.to_string(index=False))
     assert set(summ['video']) == {'synthetic', 'synthetic_png'}, 'нет одного из видео'
     assert (summ['n_tracks'] >= 20).all(), 'слишком мало треков'
-    assert not (root / 'out' / pipeline.DIR_TRACKMATE / 'synthetic_png' / '_rejected_spots.csv').exists()
+    assert not (root / 'out' / 'synthetic_png' / pipeline.DIR_TRACKMATE / '_rejected_spots.csv').exists()
+    for v in ('synthetic', 'synthetic_png'):
+        assert (root / 'out' / v / pipeline.DIR_CLUSTER / f'{v}_scatter.png').exists(), f'нет графика {v}'
     from sperm_pipeline import trackmate                                # повтор: всё уже посчитано
-    again = trackmate.run(fiji, root / 'videos', root / 'out' / pipeline.DIR_TRACKMATE, log=print)
+    again = trackmate.run(fiji, root / 'videos', root / 'out_again', log=print,
+                          dest=lambda v: root / 'out' / v / pipeline.DIR_TRACKMATE)
     assert len(again['already']) == 2 and not again['ok'], again
     one = trackmate.run(fiji, root / 'videos', root / 'out_one_fiji', log=print, n_procs=1)   # то же одной Fiji
     assert len(one['ok']) == 2, one
-    for f in sorted((root / 'out' / pipeline.DIR_TRACKMATE).rglob('*_spots.csv')):
-        g = root / 'out_one_fiji' / f.relative_to(root / 'out' / pipeline.DIR_TRACKMATE)
+    for f in sorted((root / 'out').glob(f'*/{pipeline.DIR_TRACKMATE}/*_spots.csv')):
+        g = root / 'out_one_fiji' / f.parent.parent.name / f.name
         assert same_tracking(f, g), f'2 Fiji и 1 Fiji дали разные {f.parent.name}/{f.name}'
     print('2 Fiji одновременно = 1 Fiji: те же споты, те же треки, те же признаки треков')
     if len(sys.argv) > 3:

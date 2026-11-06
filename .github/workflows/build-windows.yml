@@ -69,5 +69,4 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          Get-Content "$env:RUNNER_TEMP\fijicheck\out\0 TRACKMATE\_fiji_журнал.txt" -ErrorAction SilentlyContinue
-          Get-Content "$env:RUNNER_TEMP\fijicheck\out_mpg\0 TRACKMATE\_fiji_журнал.txt" -ErrorAction SilentlyContinue
+          Get-ChildItem "$env:RUNNER_TEMP\fijicheck" -Recurse -Filter "_fiji_журнал*.txt" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "== $($_.FullName)"; Get-Content $_.FullName }
