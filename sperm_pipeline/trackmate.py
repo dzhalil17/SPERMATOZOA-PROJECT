@@ -299,7 +299,8 @@ def run(fiji_exe: str, videos_dir, out_dir: Path, log=print, stop=lambda: False,
             env = dict(os.environ, SPERMPIPELINE_PARAMS=str(job_path))
             cmd = [fiji, f'--mem={heap_mb}m', '--ij2', '--headless', '--console', '--run', str(script)]
             flog = (out_dir / f'_fiji_журнал{sfx}.txt').open('a', encoding='utf-8', errors='replace')
-            flog.write(f'\n===== {time.strftime("%Y-%m-%d %H:%M:%S")}  {videos_dir}  (Fiji {i} из {n}, '
+            src = ', '.join(str(x[1]) for x in videos_dir) if isinstance(videos_dir, (list, tuple)) else videos_dir
+            flog.write(f'\n===== {time.strftime("%Y-%m-%d %H:%M:%S")}  {src}  (Fiji {i} из {n}, '
                        f'отрезков {len(grp)})\n')
             flog.flush()
             proc = subprocess.Popen(cmd, stdout=flog, stderr=subprocess.STDOUT, env=env, creationflags=flags)

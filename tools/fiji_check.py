@@ -85,7 +85,7 @@ def check_from_mpg(fiji: str, ffmpeg: str, root: Path):
     print('отрезки:', segs, ' в _rejected:', n_rej)
     assert len(segs) == 2, 'ожидалось 2 отрезка'
     import pandas as pd
-    summ = pd.read_excel(root / 'out_mpg' / pipeline.DIR_ALL / pipeline.SUMMARY)
+    summ = pd.read_excel(root / 'out_mpg' / pipeline.DIR_ALL / pipeline.SUMMARY, dtype={'video': str})
     print(summ.to_string(index=False))
     assert list(summ['video'].astype(str)) == ['01'] and summ['n_tracks'].iloc[0] >= 20
     for d in (pipeline.DIR_TRACKMATE, pipeline.DIR_TABLES, pipeline.DIR_FILTER, pipeline.DIR_CASA_TRACKS):

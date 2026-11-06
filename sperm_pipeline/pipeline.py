@@ -341,9 +341,9 @@ def cluster(cfg, casa_files: list, out_root: Path, log):
         clustering.FILES = clustering.PLOT_DIR = None
     log(buf.getvalue().rstrip())
     # итог каждого видео — рядом с его графиком
-    book = pd.read_excel(all_dir / SUMMARY, sheet_name=None)
+    book = pd.read_excel(all_dir / SUMMARY, sheet_name=None, dtype={'video': str})   # «01» не превращать в 1
     lab_path = all_dir / 'tracks_labeled.xlsx'
-    labeled = pd.read_excel(lab_path) if lab_path.exists() else None
+    labeled = pd.read_excel(lab_path, dtype={'video': str}) if lab_path.exists() else None
     for v in book['per_video']['video'].astype(str):
         d = out_root / v / DIR_CLUSTER
         d.mkdir(parents=True, exist_ok=True)
