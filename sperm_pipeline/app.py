@@ -114,6 +114,13 @@ class App(tk.Tk):
         self.e_fiji.grid(row=r, column=1, sticky='we')
         ttk.Button(f, text='…', width=3, command=self._pick_fiji).grid(row=r, column=2, padx=2)
         r += 1
+        ttk.Label(f, text='Fiji одновременно:').grid(row=r, column=0, sticky='w', padx=(24, 4))
+        fp = ttk.Frame(f)
+        fp.grid(row=r, column=1, sticky='w')
+        ttk.Spinbox(fp, from_=1, to=16, textvariable=self.gv['fiji_procs'], width=5).pack(side='left')
+        ttk.Label(fp, foreground='#666', text=f'  каждой Fiji ~4 ГБ памяти и ~3 потока; память делится поровну, '
+                                              f'потоки тоже (у этого ПК потоков {os.cpu_count()})').pack(side='left')
+        r += 1
         step_row('step_tables', '1. Оформить экспорты TrackMate (.csv) — вместо макросов Excel')
         self.e_raw = folder_row('raw_dir', 'Экспорты TrackMate:', 'папка с *_spots.csv и *_tracks.csv или папка с подпапками-видео')
         step_row('step_filter', '2–4. Супер-фильтрация → склейка по видео → CASA-метрики (VAP, STR, LIN …)')
@@ -234,7 +241,7 @@ class App(tk.Tk):
                     raise ValueError(f'{name}: {e}')
         for k, var in self.gv.items():
             v = var.get()
-            cfg['general'][k] = int(v) if k == 'n_workers' else v
+            cfg['general'][k] = int(v) if k in ('n_workers', 'fiji_procs') else v
         return cfg
 
     def _reset(self):

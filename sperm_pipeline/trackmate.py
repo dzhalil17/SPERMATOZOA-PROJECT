@@ -119,7 +119,67 @@ def find_jobs(root: Path):
     return jobs, skipped
 
 
-def run(fiji_exe: str, videos_dir: Path, out_dir: Path, log=print, stop=lambda: False, raise_if_none=True) -> dict:
+def total_ram_gb() -> float:
+    """Объём оперативной памяти компьютера, ГБ."""
+    try:
+        if os.name == 'nt':
+            import ctypes
+
+            class _MS(ctypes.Structure):
+                _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong)] + \
+                           [(n, ctypes.c_ulonglong) for n in ('total', 'avail', 'tpf', 'apf', 'tv', 'av', 'aev')]
+            m = _MS()
+            m.dwLength = ctypes.sizeof(_MS)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+            return m.total / 2 ** 30
+        return os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / 2 ** 30
+    except Exception:
+        return 8.0
+
+
+def default_procs() -> int:
+    """Сколько Fiji запускать одновременно: ~3 потока процессора и ~4 ГБ памяти на одну Fiji."""
+    return max(1, min((os.cpu_count() or 2) // 3, int(total_ram_gb() // 4)))
+
+
+def _png_size(path: Path):
+    with open(path, 'rb') as fh:
+        head = fh.read(24)
+    if head[:8] != b'\x89PNG\r\n\x1a\n':
+        return None
+    return int.from_bytes(head[16:20], 'big'), int.from_bytes(head[20:24], 'big')
+
+
+def _job_info(job):
+    """→ (вес для раздачи по процессам — байты на диске, оценка памяти Fiji на этот отрезок в ГБ или None)."""
+    _, _, path, kind = job
+    p = Path(path)
+    if kind == 'file':
+        return p.stat().st_size, None
+    frames = sorted(f for f in p.iterdir() if f.suffix.lower() in FRAME_EXT)
+    size = sum(f.stat().st_size for f in frames)
+    wh = _png_size(frames[0]) if frames and frames[0].suffix.lower() == '.png' else None
+    # кадры открываются как RGB (4 байта/пиксель) + 8-bit копия + стек максимумов; запас 30 % и 0.5 ГБ на саму Fiji
+    need = len(frames) * wh[0] * wh[1] * 6 * 1.3 / 2 ** 30 + 0.5 if wh else None
+    return size, need
+
+
+def _split(jobs, n):
+    """Раздать отрезки на n процессов поровну по объёму (самые большие — первыми, каждому самый свободный)."""
+    info = {tuple(j): _job_info(j) for j in jobs}
+    groups, load = [[] for _ in range(n)], [0] * n
+    for j in sorted(jobs, key=lambda j: -info[tuple(j)][0]):
+        i = load.index(min(load))
+        groups[i].append(j)
+        load[i] += info[tuple(j)][0]
+    order = {tuple(j): k for k, j in enumerate(jobs)}          # внутри процесса — в исходном порядке
+    groups = [sorted(g, key=lambda j: order[tuple(j)]) for g in groups if g]
+    needs = [v[1] for v in info.values() if v[1]]
+    return groups, (max(needs) if needs else None)
+
+
+def run(fiji_exe: str, videos_dir: Path, out_dir: Path, log=print, stop=lambda: False, raise_if_none=True,
+        n_procs: int = 1) -> dict:
     """→ {'ok': [(видео, отрезок, кадров, спотов, треков)], 'bad': [(видео, отрезок, ошибка)], 'already': [...]}.
     Отрезки, у которых уже есть оба CSV, не пересчитываются (продолжение после сбоя)."""
     fiji = fiji_exe or find_fiji()
@@ -157,51 +217,93 @@ def run(fiji_exe: str, videos_dir: Path, out_dir: Path, log=print, stop=lambda: 
         log(f'Видео «{v}»: отрезков {len(segs)} ({", ".join(sorted({kinds[j[3]] for j in segs}))})')
     if skipped:
         log(f'Пропущены папки (имя начинается с «_»): {", ".join(skipped)}')
-    out_dir.mkdir(parents=True, exist_ok=True)
     script = out_dir / '_fiji_trackmate.py'
     script.write_text(JYTHON_SCRIPT, encoding='utf-8')
-    job = {**params(), 'input_dir': str(videos_dir), 'output_dir': str(out_dir), 'jobs': [list(j) for j in jobs]}
-    job_path = out_dir / '_trackmate_params.json'
-    job_path.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding='utf-8')
-    env = dict(os.environ, SPERMPIPELINE_PARAMS=str(job_path))
-    cmd = [fiji, '--ij2', '--headless', '--console', '--run', str(script)]
+    for f in list(out_dir.glob('_progress*.txt')) + list(out_dir.glob('_trackmate_params*.json')):
+        f.unlink()
+
+    # несколько Fiji одновременно: у каждой свой список отрезков, свой файл прогресса и журнал, своя доля памяти
+    ram = total_ram_gb()
+    n = max(1, min(int(n_procs or 1), len(jobs)))
+    groups, need = _split(jobs, n)
+    budget = ram * 0.75                                  # четверть памяти — Windows и остальным программам
+    if need and n > 1 and need > budget / n:
+        n_fit = max(1, int(budget // need))
+        if n_fit < n:
+            log(f'Самому длинному отрезку нужно ~{need:.1f} ГБ памяти, а на {n} Fiji при {ram:.0f} ГБ ОЗУ '
+                f'приходится по {budget / n:.1f} ГБ — запускаю {n_fit} одновременно')
+            n = n_fit
+            groups, need = _split(jobs, n)
+    n = len(groups)
+    heap_mb = max(1024, int(budget / n * 1024))
+    threads = max(1, (os.cpu_count() or 2) // n)
+    if need and need * 1024 > heap_mb:
+        log(f'ВНИМАНИЕ: самому длинному отрезку нужно ~{need:.1f} ГБ, а Fiji получит {heap_mb / 1024:.1f} ГБ — '
+            f'на нём может не хватить памяти (будет «ОШИБКА … OutOfMemory», остальные отрезки посчитаются)')
     log(f'Fiji: {fiji}')
-    progress = out_dir / '_progress.txt'
-    if progress.exists():
-        progress.unlink()
+    log(f'Запускаю Fiji: {n} одновременно, у каждой {heap_mb / 1024:.1f} ГБ памяти и {threads} потоков '
+        f'(ОЗУ {ram:.0f} ГБ, потоков процессора {os.cpu_count()})')
     flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-    with (out_dir / '_fiji_журнал.txt').open('a', encoding='utf-8', errors='replace') as flog:
-        flog.write(f'\n===== {time.strftime("%Y-%m-%d %H:%M:%S")}  {videos_dir}\n')
-        flog.flush()
-        proc = subprocess.Popen(cmd, stdout=flog, stderr=subprocess.STDOUT, env=env, creationflags=flags)
-        seen, ok, bad = 0, 0, 0
+    procs = []
+    ok, bad = 0, 0
+    try:
+        for i, grp in enumerate(groups, 1):
+            sfx = '' if n == 1 else f'_{i}'
+            progress = out_dir / f'_progress{sfx}.txt'
+            job = {**params(), 'input_dir': str(videos_dir), 'output_dir': str(out_dir), 'jobs': [list(j) for j in grp],
+                   'progress_file': str(progress), 'THREADS': threads}
+            job_path = out_dir / f'_trackmate_params{sfx}.json'
+            job_path.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding='utf-8')
+            env = dict(os.environ, SPERMPIPELINE_PARAMS=str(job_path))
+            cmd = [fiji, f'--mem={heap_mb}m', '--ij2', '--headless', '--console', '--run', str(script)]
+            flog = (out_dir / f'_fiji_журнал{sfx}.txt').open('a', encoding='utf-8', errors='replace')
+            flog.write(f'\n===== {time.strftime("%Y-%m-%d %H:%M:%S")}  {videos_dir}  (Fiji {i} из {n}, '
+                       f'отрезков {len(grp)})\n')
+            flog.flush()
+            proc = subprocess.Popen(cmd, stdout=flog, stderr=subprocess.STDOUT, env=env, creationflags=flags)
+            procs.append({'proc': proc, 'progress': progress, 'flog': flog, 'seen': 0,
+                          'tag': '' if n == 1 else f'[Fiji {i}] '})
+            if n > 1:
+                log(f'  Fiji {i}: отрезков {len(grp)}')
         while True:
-            alive = proc.poll() is None
-            lines = progress.read_text(encoding='utf-8', errors='replace').splitlines() if progress.exists() else []
-            for line in lines[seen:]:
-                p = line.split('|')
-                if p[0] == 'OK':
-                    ok += 1
-                    res['ok'].append((p[1], p[2], int(p[3]), int(p[4]), int(p[5])))
-                    log(f'  OK {p[1]} / {p[2]}: кадров {p[3]}, спотов {p[4]}, треков {p[5]}')
-                elif p[0] == 'ERR':
-                    bad += 1
-                    res['bad'].append((p[1], p[2] if len(p) > 3 else '', p[-1]))
-                    log(f'  ОШИБКА {" / ".join(p[1:-1])}: {p[-1]}')
-                elif p[0] == 'START':
-                    log(f'  {p[1]} / {p[2]}: обработка…')
-            seen = len(lines)
-            if not alive:
+            alive = [p['proc'].poll() is None for p in procs]
+            for p in procs:
+                pr = p['progress']
+                lines = pr.read_text(encoding='utf-8', errors='replace').splitlines() if pr.exists() else []
+                for line in lines[p['seen']:]:
+                    q = line.split('|')
+                    if q[0] == 'OK':
+                        ok += 1
+                        res['ok'].append((q[1], q[2], int(q[3]), int(q[4]), int(q[5])))
+                        log(f'  {p["tag"]}OK {q[1]} / {q[2]}: кадров {q[3]}, спотов {q[4]}, треков {q[5]}')
+                    elif q[0] == 'ERR':
+                        bad += 1
+                        res['bad'].append((q[1], q[2] if len(q) > 3 else '', q[-1]))
+                        log(f'  {p["tag"]}ОШИБКА {" / ".join(q[1:-1])}: {q[-1]}')
+                    elif q[0] == 'START':
+                        log(f'  {p["tag"]}{q[1]} / {q[2]}: обработка…')
+                p['seen'] = len(lines)
+            if not any(alive):
                 break
             if stop():
-                proc.kill()
+                for p in procs:
+                    if p['proc'].poll() is None:
+                        p['proc'].kill()
                 break
             time.sleep(0.5)
-    log(f'TrackMate: готово {ok}, с ошибкой {bad}. Журнал Fiji: {out_dir / "_fiji_журнал.txt"}')
+    finally:
+        for p in procs:                       # после «Стоп» или сбоя приложения Fiji не остаются висеть
+            if p['proc'].poll() is None:
+                p['proc'].kill()
+                p['proc'].wait()
+            p['flog'].close()
+    codes = [p['proc'].poll() for p in procs]
+    log(f'TrackMate: готово {ok}, с ошибкой {bad}. Журнал Fiji: {out_dir / "_fiji_журнал.txt"}'
+        + (f' (и _2 … _{n})' if n > 1 else ''))
     if stop():
         return res
     if not ok and not already and raise_if_none:
-        raise RuntimeError(f'Fiji не обработала ни одного видео (код {proc.returncode}); '
+        raise RuntimeError(f'Fiji не обработала ни одного видео (коды {codes}); '
                            f'подробности — {out_dir / "_fiji_журнал.txt"}')
     return res
 
@@ -239,7 +341,8 @@ TRACK_KEYS = ['TRACK_INDEX', 'TRACK_ID', 'NUMBER_SPOTS', 'NUMBER_GAPS', 'NUMBER_
               'LINEARITY_OF_FORWARD_PROGRESSION', 'MEAN_DIRECTIONAL_CHANGE_RATE']
 
 
-PROG = OutputStreamWriter(FileOutputStream(os.path.join(P['output_dir'], '_progress.txt')), 'UTF-8')
+PROG = OutputStreamWriter(FileOutputStream(P.get('progress_file') or os.path.join(P['output_dir'], '_progress.txt')),
+                          'UTF-8')
 
 
 def safe(x):
@@ -327,6 +430,8 @@ def track(imp):
     s.trackerSettings = ts
     s.addAllAnalyzers()
     tm = TrackMate(model, s)
+    if P.get('THREADS'):
+        tm.setNumThreads(int(P['THREADS']))   # several Fiji at once share the CPU
     if not tm.checkInput():
         raise Exception('TrackMate checkInput: ' + str(tm.getErrorMessage()))
     if not tm.process():

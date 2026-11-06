@@ -172,7 +172,8 @@ def run(cfg: dict, log=print, stop=lambda: False) -> Path:
         if not g.get('videos_dir'):
             raise ValueError('Шаг 0 включён, но не задана папка с видео')
         log(f'\n=== 0. TRACKMATE (Fiji без окна) ===')
-        trackmate.run(g.get('fiji_exe', ''), Path(g['videos_dir']), out_root / DIR_TRACKMATE, log, stop)
+        trackmate.run(g.get('fiji_exe', ''), Path(g['videos_dir']), out_root / DIR_TRACKMATE, log, stop,
+                      n_procs=int(g.get('fiji_procs') or 1))
         raw_dir = str(out_root / DIR_TRACKMATE)
         g['step_tables'] = True
     if stop():

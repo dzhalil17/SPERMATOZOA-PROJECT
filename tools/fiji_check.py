@@ -100,8 +100,9 @@ def main():
                             LINKING_MAX_DISTANCE=15.0, GAP_CLOSING_MAX_DISTANCE=15.0, MAX_FRAME_GAP=2)
     cfg['general'].update(step_trackmate=True, videos_dir=str(root / 'videos'), fiji_exe=fiji,
                           output_dir=str(root / 'out'), step_tables=True, step_filter=True, step_cluster=True,
-                          n_workers=2)
+                          n_workers=2, fiji_procs=2)               # 2 отрезка → 2 Fiji одновременно
     pipeline.run(cfg, log=lambda m: print(m, flush=True))
+    assert (root / 'out' / pipeline.DIR_TRACKMATE / '_fiji_журнал_2.txt').exists(), 'вторая Fiji не запускалась'
     import pandas as pd
     summ = pd.read_excel(root / 'out' / pipeline.DIR_CLUSTER / 'summary_all_videos.xlsx')
     print(summ.to_string(index=False))
@@ -111,6 +112,12 @@ def main():
     from sperm_pipeline import trackmate                                # повтор: всё уже посчитано
     again = trackmate.run(fiji, root / 'videos', root / 'out' / pipeline.DIR_TRACKMATE, log=print)
     assert len(again['already']) == 2 and not again['ok'], again
+    one = trackmate.run(fiji, root / 'videos', root / 'out_one_fiji', log=print, n_procs=1)   # то же одной Fiji
+    assert len(one['ok']) == 2, one
+    for f in sorted((root / 'out' / pipeline.DIR_TRACKMATE).rglob('*.csv')):
+        g = root / 'out_one_fiji' / f.relative_to(root / 'out' / pipeline.DIR_TRACKMATE)
+        assert f.read_bytes() == g.read_bytes(), f'2 Fiji и 1 Fiji дали разные {f.name}'
+    print('2 Fiji одновременно = 1 Fiji: CSV совпадают байт в байт')
     if len(sys.argv) > 3:
         check_from_mpg(fiji, sys.argv[3], root)
     print('FIJI CHECK: OK')
