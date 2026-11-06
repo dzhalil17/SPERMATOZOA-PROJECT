@@ -92,8 +92,15 @@ def check_from_mpg(fiji: str, ffmpeg: str, root: Path):
 
 def same_tracking(spots_a: Path, spots_b: Path) -> bool:
     """Одинаков ли результат TrackMate. Номера спотов и треков (ID) — счётчик Java, зависят от числа потоков и
-    порядка работы, поэтому сравниваются сами споты (кадр, x, y, все признаки) и состав каждого трека."""
+    порядка работы, поэтому сравниваются сами споты (кадр, x, y, все признаки), состав каждого трека и признаки
+    треков (до 9 значащих цифр: суммы в другом порядке дают разницу в последнем знаке double)."""
     import pandas as pd
+
+    def r9(v):
+        try:
+            return f'{float(v):.9g}'
+        except ValueError:
+            return v
 
     def load(spots):
         sp = pd.read_csv(spots, skiprows=[1, 2, 3], dtype=str).fillna('')
@@ -102,13 +109,24 @@ def same_tracking(spots_a: Path, spots_b: Path) -> bool:
         tracks = sorted(tuple(sorted(key[sp['TRACK_ID'] == t])) for t in sp['TRACK_ID'].unique() if t != '')
         tr = pd.read_csv(Path(str(spots).replace('_spots.csv', '_tracks.csv')), skiprows=[1, 2, 3], dtype=str).fillna('')
         tfeats = [c for c in tr.columns if c not in ('LABEL', 'TRACK_INDEX', 'TRACK_ID')]
-        return sorted(key), tracks, sorted(tr[tfeats].agg('|'.join, axis=1))
+        exact = sorted(tr[tfeats].agg('|'.join, axis=1))
+        rounded = sorted(tr[tfeats].map(r9).agg('|'.join, axis=1))
+        return sorted(key), tracks, rounded, exact, tfeats
 
     a, b = load(spots_a), load(spots_b)
+    name = f'{spots_a.parent.name}/{spots_a.name}'
     for what, x, y in zip(('споты', 'состав треков', 'признаки треков'), a, b):
         if x != y:
-            print(f'  {spots_a.parent.name}/{spots_a.name}: различаются {what}')
+            print(f'  {name}: различаются {what}')
+            if what == 'признаки треков':
+                for ra, rb in zip(x, y):
+                    if ra != rb:
+                        print('   ', [(c, u, v) for c, u, v in zip(a[4], ra.split('|'), rb.split('|')) if u != v][:6])
+                        break
             return False
+    if a[3] != b[3]:
+        diff = {c for ra, rb in zip(a[3], b[3]) for c, u, v in zip(a[4], ra.split('|'), rb.split('|')) if u != v}
+        print(f'  {name}: признаки треков совпали до 9 знаков; в последних знаках расходятся: {sorted(diff)}')
     return True
 
 
