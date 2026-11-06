@@ -90,6 +90,28 @@ def check_from_mpg(fiji: str, ffmpeg: str, root: Path):
     assert list(summ['video']) == ['1 video'] and summ['n_tracks'].iloc[0] >= 20
 
 
+def same_tracking(spots_a: Path, spots_b: Path) -> bool:
+    """Одинаков ли результат TrackMate. Номера спотов и треков (ID) — счётчик Java, зависят от числа потоков и
+    порядка работы, поэтому сравниваются сами споты (кадр, x, y, все признаки) и состав каждого трека."""
+    import pandas as pd
+
+    def load(spots):
+        sp = pd.read_csv(spots, skiprows=[1, 2, 3], dtype=str).fillna('')
+        feats = [c for c in sp.columns if c not in ('LABEL', 'ID', 'TRACK_ID')]
+        key = sp[feats].agg('|'.join, axis=1)
+        tracks = sorted(tuple(sorted(key[sp['TRACK_ID'] == t])) for t in sp['TRACK_ID'].unique() if t != '')
+        tr = pd.read_csv(Path(str(spots).replace('_spots.csv', '_tracks.csv')), skiprows=[1, 2, 3], dtype=str).fillna('')
+        tfeats = [c for c in tr.columns if c not in ('LABEL', 'TRACK_INDEX', 'TRACK_ID')]
+        return sorted(key), tracks, sorted(tr[tfeats].agg('|'.join, axis=1))
+
+    a, b = load(spots_a), load(spots_b)
+    for what, x, y in zip(('споты', 'состав треков', 'признаки треков'), a, b):
+        if x != y:
+            print(f'  {spots_a.parent.name}/{spots_a.name}: различаются {what}')
+            return False
+    return True
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     fiji = sys.argv[1]
@@ -114,10 +136,10 @@ def main():
     assert len(again['already']) == 2 and not again['ok'], again
     one = trackmate.run(fiji, root / 'videos', root / 'out_one_fiji', log=print, n_procs=1)   # то же одной Fiji
     assert len(one['ok']) == 2, one
-    for f in sorted((root / 'out' / pipeline.DIR_TRACKMATE).rglob('*.csv')):
+    for f in sorted((root / 'out' / pipeline.DIR_TRACKMATE).rglob('*_spots.csv')):
         g = root / 'out_one_fiji' / f.relative_to(root / 'out' / pipeline.DIR_TRACKMATE)
-        assert f.read_bytes() == g.read_bytes(), f'2 Fiji и 1 Fiji дали разные {f.name}'
-    print('2 Fiji одновременно = 1 Fiji: CSV совпадают байт в байт')
+        assert same_tracking(f, g), f'2 Fiji и 1 Fiji дали разные {f.parent.name}/{f.name}'
+    print('2 Fiji одновременно = 1 Fiji: те же споты, те же треки, те же признаки треков')
     if len(sys.argv) > 3:
         check_from_mpg(fiji, sys.argv[3], root)
     print('FIJI CHECK: OK')
