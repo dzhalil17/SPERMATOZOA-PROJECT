@@ -2,8 +2,8 @@
 Шаг 0: видео → TrackMate, без окна Fiji.
 
 Приложение запускает вашу Fiji в фоновом режиме (--headless) со скриптом на Jython (он встроен ниже,
-отдельно ставить ничего не надо). Скрипт повторяет шаги Fiji-плагина Sperm_Tracking_Pipeline:
-  8-bit → контраст (растяжка Min..Max, как B&C «Apply») → Gaussian Blur → Find Maxima (Single Points,
+отдельно ставить ничего не надо). Скрипт повторяет ручную обработку (порядок плагина — переключателем):
+  8-bit → Gaussian Blur → контраст (растяжка Min..Max, как B&C «Apply») → Find Maxima (Single Points,
   каждый кадр) → TrackMate: LoG-детектор + LAP-трекер, все признаки → экспорт спотов и треков в CSV
   в том же виде, что кнопка «Export to CSV» в TrackMate (4 строки заголовка).
 Дальше эти CSV забирает шаг 1 (оформление таблиц).
@@ -29,6 +29,7 @@ DO_8BIT = True
 CONTRAST_MIN = 0.0          # растяжка контраста: Min → 0, Max → 255 (0 и 255 = без изменений)
 CONTRAST_MAX = 255.0
 GAUSSIAN_SIGMA = 4.0        # 0 = без размытия
+BLUR_BEFORE_CONTRAST = True # порядок как вручную: 8-bit → Gaussian → B&C → Find Maxima (False — B&C до Gaussian, как в плагине)
 NOISE_TOLERANCE = 25.0      # Find Maxima: prominence (noise tolerance)
 EXCLUDE_EDGE_MAXIMA = False
 LIGHT_BACKGROUND = False
@@ -62,7 +63,7 @@ def find_fiji() -> str:
 
 
 def params() -> dict:
-    keys = ['DO_8BIT', 'CONTRAST_MIN', 'CONTRAST_MAX', 'GAUSSIAN_SIGMA', 'NOISE_TOLERANCE', 'EXCLUDE_EDGE_MAXIMA',
+    keys = ['DO_8BIT', 'CONTRAST_MIN', 'CONTRAST_MAX', 'GAUSSIAN_SIGMA', 'BLUR_BEFORE_CONTRAST', 'NOISE_TOLERANCE', 'EXCLUDE_EDGE_MAXIMA',
             'LIGHT_BACKGROUND', 'LOG_RADIUS', 'LOG_QUALITY_THRESHOLD', 'LOG_SUBPIXEL', 'LOG_MEDIAN_FILTER',
             'LINKING_MAX_DISTANCE', 'GAP_CLOSING_MAX_DISTANCE', 'MAX_FRAME_GAP', 'VIDEO_EXT']
     return {k: globals()[k] for k in keys}
@@ -366,7 +367,7 @@ from java.io import File, OutputStreamWriter, FileOutputStream
 from java.nio.file import Files, Paths, StandardCopyOption
 from ij import IJ, ImagePlus, ImageStack
 from ij.plugin import FolderOpener
-from ij.process import StackConverter, ByteProcessor, ImageProcessor
+from ij.process import StackConverter, ByteProcessor, ColorProcessor, ImageProcessor
 from ij.plugin.filter import GaussianBlur, MaximumFinder
 from fiji.plugin.trackmate import Model, Settings, TrackMate, Logger
 from fiji.plugin.trackmate.detection import LogDetectorFactory
@@ -428,11 +429,18 @@ def preprocess(imp):
     st = imp.getStack()
     lut = stretch_lut(P['CONTRAST_MIN'], P['CONTRAST_MAX'])
     gb = GaussianBlur()
+    do_lut = not (P['CONTRAST_MIN'] == 0 and P['CONTRAST_MAX'] == 255)
+    do_blur = P['GAUSSIAN_SIGMA'] and P['GAUSSIAN_SIGMA'] > 0
+    blur_first = P.get('BLUR_BEFORE_CONTRAST', False)
     for i in range(1, st.getSize() + 1):
         ip = st.getProcessor(i)
-        if not (P['CONTRAST_MIN'] == 0 and P['CONTRAST_MAX'] == 255):
+        if do_blur and blur_first:      # manual order: 8-bit -> Gaussian -> B&C (Apply) -> Find Maxima
+            # accuracy as Process > Filters > Gaussian Blur: 0.002 for 8-bit/RGB, 0.0002 otherwise
+            acc = 0.002 if isinstance(ip, (ByteProcessor, ColorProcessor)) else 0.0002
+            gb.blurGaussian(ip, float(P['GAUSSIAN_SIGMA']), float(P['GAUSSIAN_SIGMA']), acc)
+        if do_lut:
             ip.applyTable(lut)
-        if P['GAUSSIAN_SIGMA'] and P['GAUSSIAN_SIGMA'] > 0:
+        if do_blur and not blur_first:  # plugin order: 8-bit -> B&C -> Gaussian -> Find Maxima
             gb.blurGaussian(ip, float(P['GAUSSIAN_SIGMA']), float(P['GAUSSIAN_SIGMA']), 0.02)
 
 

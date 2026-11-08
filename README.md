@@ -3,7 +3,7 @@
 ```
 SpermPipeline
   00 КАДРЫ         .mpg → кадры (ffmpeg) → отрезки «начало-конец» + _rejected (GET SEQUENCES IN ORDER FROM VIDEO.py)
-  0 TRACKMATE      кадры → ваша Fiji без окна: 8-bit → контраст → Gaussian → Find Maxima (Single Points)
+  0 TRACKMATE      кадры → ваша Fiji без окна: 8-bit → Gaussian → контраст (B&C) → Find Maxima (Single Points)
                    → TrackMate LoG + LAP → CSV спотов и треков (шаги Fiji-плагина Sperm_Tracking_Pipeline)
   1 ТАБЛИЦЫ        оформление экспортов TrackMate (.csv) — вместо макросов Excel
   2 ФИЛЬТРАЦИЯ     супер-фильтрация каждого отрезка: сшивка → разрез у границ → свап коллизий → фильтр по длине

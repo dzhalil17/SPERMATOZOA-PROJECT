@@ -24,6 +24,7 @@ TRACKMATE = [
     ('CONTRAST_MIN', 'Контраст: Min (→ 0)'),
     ('CONTRAST_MAX', 'Контраст: Max (→ 255)'),
     ('GAUSSIAN_SIGMA', 'Gaussian Blur: sigma (0 — без размытия)'),
+    ('BLUR_BEFORE_CONTRAST', 'Порядок: Gaussian до контраста (как вручную); выкл — контраст до Gaussian (как плагин)'),
     ('NOISE_TOLERANCE', 'Find Maxima: noise tolerance (prominence)'),
     ('EXCLUDE_EDGE_MAXIMA', 'Find Maxima: exclude edge maxima'),
     ('LIGHT_BACKGROUND', 'Find Maxima: light background'),
