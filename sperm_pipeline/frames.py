@@ -5,7 +5,8 @@
 отличия помечены [SpermPipeline]:
   * ffmpeg запускается без чёрного окна, его вывод не теряется: при ошибке печатаются последние строки;
   * путь к ffmpeg: из настроек, иначе ваш путь ниже, иначе ffmpeg из PATH;
-  * run() — вызов из приложения (print идёт в окно журнала, есть кнопка «Остановить» между видео).
+  * run() — вызов из приложения (print идёт в окно журнала, есть кнопка «Остановить» между видео);
+  * кадры с калибровочной линейкой (MAX_LINES) уходят в _rejected, а не в отрезки.
 """
 import os
 import re
@@ -38,6 +39,7 @@ MIN_BRIGHTNESS = 60     # средняя яркость нормального �
 MAX_BRIGHTNESS = 240    # белые вспышки при переключении ~250
 MAX_STD = 35            # нормальный кадр ~12-17, "снег"/шум ~80
 MAX_HF = 6              # резкие перепады между соседними пикселями: норма ~2, шум ~20
+MAX_LINES = 15          # вертикальные линии через весь кадр: калибровочная линейка ~29-37, образец <= 7
 MIN_SEGMENT_LEN = 100   # отрезки короче (в кадрах) считаются мусором переключения
 TRIM = 3                # сколько кадров отрезать с каждого края отрезка (затухание)
 REJECT_FOLDER = "_rejected"  # сюда уходят черные/шумные кадры (не удаляются)
@@ -74,11 +76,15 @@ def frame_stats(path):
     # обрезаем верх с датой/временем и края с черной рамкой
     a = np.asarray(Image.open(path).convert("L"), dtype=np.float32)[60:-20, 20:-20]
     hf = np.abs(np.diff(a, axis=1)).mean()
-    return a.mean(), a.std(), hf
+    # [SpermPipeline] средняя яркость каждого столбца: у линейки линии через весь кадр дают резкие пики
+    col = a.mean(axis=0)
+    lines = np.abs(col - np.convolve(col, np.ones(9) / 9, mode="same"))[9:-9].max()
+    return a.mean(), a.std(), hf, lines
 
 
-def is_good(mean, std, hf):
-    return MIN_BRIGHTNESS < mean < MAX_BRIGHTNESS and std < MAX_STD and hf < MAX_HF
+def is_good(mean, std, hf, lines):
+    return (MIN_BRIGHTNESS < mean < MAX_BRIGHTNESS and std < MAX_STD and hf < MAX_HF
+            and lines < MAX_LINES)
 
 
 def find_segments(numbers, good):
