@@ -33,6 +33,13 @@ BLUR_BEFORE_CONTRAST = True # порядок как вручную: 8-bit → Ga
 NOISE_TOLERANCE = 25.0      # Find Maxima: prominence (noise tolerance)
 EXCLUDE_EDGE_MAXIMA = False
 LIGHT_BACKGROUND = False
+# Площадь яркого объекта, px: максимум становится точкой, только если площадь яркого пятна, в котором он лежит,
+# в этих пределах (0 = не проверять). Пятно — связная область пикселей ярче OBJECT_AREA_LEVEL на картинке до контраста
+# (после Gaussian, если он идёт первым). OBJECT_AREA_LEVEL = 0 — пятно берётся как есть на входе Find Maxima,
+# то есть всё, что ярче CONTRAST_MIN.
+MIN_OBJECT_AREA = 0.0       # меньше — мерцающая мелочь у самого порога
+MAX_OBJECT_AREA = 0.0       # больше — сгустки и крупные клетки
+OBJECT_AREA_LEVEL = 0.0     # уровень серого (0–255), выше которого пиксель считается частью объекта
 LOG_RADIUS = 2.5            # TrackMate LoG: радиус (диаметр 5)
 LOG_QUALITY_THRESHOLD = 8.0
 LOG_SUBPIXEL = False        # в ваших таблицах координаты целые
@@ -64,7 +71,7 @@ def find_fiji() -> str:
 
 def params() -> dict:
     keys = ['DO_8BIT', 'CONTRAST_MIN', 'CONTRAST_MAX', 'GAUSSIAN_SIGMA', 'BLUR_BEFORE_CONTRAST', 'NOISE_TOLERANCE', 'EXCLUDE_EDGE_MAXIMA',
-            'LIGHT_BACKGROUND', 'LOG_RADIUS', 'LOG_QUALITY_THRESHOLD', 'LOG_SUBPIXEL', 'LOG_MEDIAN_FILTER',
+            'LIGHT_BACKGROUND', 'MIN_OBJECT_AREA', 'MAX_OBJECT_AREA', 'OBJECT_AREA_LEVEL', 'LOG_RADIUS', 'LOG_QUALITY_THRESHOLD', 'LOG_SUBPIXEL', 'LOG_MEDIAN_FILTER',
             'LINKING_MAX_DISTANCE', 'GAP_CLOSING_MAX_DISTANCE', 'MAX_FRAME_GAP', 'VIDEO_EXT']
     return {k: globals()[k] for k in keys}
 
@@ -232,7 +239,9 @@ def run(fiji_exe: str, videos_dir, out_dir: Path, log=print, stop=lambda: False,
         vdst.mkdir(parents=True, exist_ok=True)
         pfile = vdst / '_параметры TrackMate.json'
         try:
-            same = json.loads(pfile.read_text(encoding='utf-8')) == cur
+            old = json.loads(pfile.read_text(encoding='utf-8'))
+            # CSV, посчитанные до появления пределов площади, равны расчёту с выключенными пределами
+            same = {'MIN_OBJECT_AREA': 0.0, 'MAX_OBJECT_AREA': 0.0, 'OBJECT_AREA_LEVEL': 0.0, **old} == cur
         except Exception:
             same = False
         csvs = [(j, Path(j[4]) / f'{j[1]}_spots.csv', Path(j[4]) / f'{j[1]}_tracks.csv') for j in vj]
@@ -324,6 +333,9 @@ def run(fiji_exe: str, videos_dir, out_dir: Path, log=print, stop=lambda: False,
                         bad += 1
                         res['bad'].append((q[1], q[2] if len(q) > 3 else '', q[-1]))
                         log(f'  {p["tag"]}ОШИБКА {" / ".join(q[1:-1])}: {q[-1]}')
+                    elif q[0] == 'AREA':
+                        log(f'  {p["tag"]}{q[1]} / {q[2]}: максимумов {q[3]}, убрано по площади: мелких {q[4]}, '
+                            f'крупных {q[5]}; площадь пятна под оставленными: медиана {q[6]}, наибольшая {q[7]} px')
                     elif q[0] == 'START':
                         log(f'  {p["tag"]}{q[1]} / {q[2]}: обработка…')
                 p['seen'] = len(lines)
@@ -369,6 +381,7 @@ from ij import IJ, ImagePlus, ImageStack
 from ij.plugin import FolderOpener
 from ij.process import StackConverter, ByteProcessor, ColorProcessor, ImageProcessor
 from ij.plugin.filter import GaussianBlur, MaximumFinder
+from ij.gui import Wand, PolygonRoi, Roi
 from fiji.plugin.trackmate import Model, Settings, TrackMate, Logger
 from fiji.plugin.trackmate.detection import LogDetectorFactory
 try:
@@ -432,21 +445,53 @@ def preprocess(imp):
     do_lut = not (P['CONTRAST_MIN'] == 0 and P['CONTRAST_MAX'] == 255)
     do_blur = P['GAUSSIAN_SIGMA'] and P['GAUSSIAN_SIGMA'] > 0
     blur_first = P.get('BLUR_BEFORE_CONTRAST', False)
+    raw = ImageStack(imp.getWidth(), imp.getHeight()) if area_level() > 0 and area_limits()[2] else None
     for i in range(1, st.getSize() + 1):
         ip = st.getProcessor(i)
         if do_blur and blur_first:      # manual order: 8-bit -> Gaussian -> B&C (Apply) -> Find Maxima
             # accuracy as Process > Filters > Gaussian Blur: 0.002 for 8-bit/RGB, 0.0002 otherwise
             acc = 0.002 if isinstance(ip, (ByteProcessor, ColorProcessor)) else 0.0002
             gb.blurGaussian(ip, float(P['GAUSSIAN_SIGMA']), float(P['GAUSSIAN_SIGMA']), acc)
+        if raw is not None:             # the picture just before the contrast step: object areas are measured on it
+            raw.addSlice('raw_%d' % i, ip.duplicate())
         if do_lut:
             ip.applyTable(lut)
         if do_blur and not blur_first:  # plugin order: 8-bit -> B&C -> Gaussian -> Find Maxima
             gb.blurGaussian(ip, float(P['GAUSSIAN_SIGMA']), float(P['GAUSSIAN_SIGMA']), 0.02)
+    return raw
 
 
-def find_maxima(imp):
+def area_limits():
+    amin, amax = float(P.get('MIN_OBJECT_AREA') or 0), float(P.get('MAX_OBJECT_AREA') or 0)
+    return amin, amax, amin > 0 or amax > 0
+
+
+def area_level():
+    return float(P.get('OBJECT_AREA_LEVEL') or 0)
+
+
+def spot_area(ip, x, y, lower):
+    """Area (px, holes included) of the bright spot the maximum lies in: the 8-connected region of pixels >= lower."""
+    if ip.get(x, y) < lower:
+        return 0
+    wand = Wand(ip)
+    wand.autoOutline(x, y, float(lower), 255.0, Wand.EIGHT_CONNECTED)
+    if wand.npoints < 3:
+        return 1
+    ip.setRoi(PolygonRoi(wand.xpoints, wand.ypoints, wand.npoints, Roi.TRACED_ROI))
+    n = ip.getStatistics().pixelCount
+    ip.resetRoi()
+    return n
+
+
+def find_maxima(imp, raw=None):
+    """Returns the single-points stack and, when the area limits are on, [maxima, too small, too large, kept areas].
+    raw - the stack as it was just before the contrast step (when the area is measured at OBJECT_AREA_LEVEL)."""
     mf = MaximumFinder()
     st = imp.getStack()
+    amin, amax, by_area = area_limits()
+    level = int(area_level())
+    stat = [0, 0, 0, []]
     out = ImageStack(imp.getWidth(), imp.getHeight())
     for i in range(1, st.getSize() + 1):
         ip = st.getProcessor(i).duplicate()
@@ -456,6 +501,29 @@ def find_maxima(imp):
                            P['EXCLUDE_EDGE_MAXIMA'], False)
         if bp is None:
             bp = ByteProcessor(imp.getWidth(), imp.getHeight())
+        elif by_area:
+            # the same maxima as points; a maximum stays only if its bright spot has an allowed area
+            pts = mf.getMaxima(ip, float(P['NOISE_TOLERANCE']), P['EXCLUDE_EDGE_MAXIMA'])
+            src, lower = ip, 1
+            if raw is not None:
+                src, lower = raw.getProcessor(i), level + 1
+                if P['LIGHT_BACKGROUND']:
+                    src.invert()
+                    lower = 255 - level + 1
+            for k in range(pts.npoints):
+                x, y = pts.xpoints[k], pts.ypoints[k]
+                if bp.get(x, y) == 0:
+                    continue
+                a = spot_area(src, x, y, lower)
+                stat[0] += 1
+                if amin > 0 and a < amin:
+                    stat[1] += 1
+                    bp.set(x, y, 0)
+                elif amax > 0 and a > amax:
+                    stat[2] += 1
+                    bp.set(x, y, 0)
+                else:
+                    stat[3].append(a)
         out.addSlice('maxima_%d' % i, bp)
     res = ImagePlus(imp.getTitle() + '_SingleMaxima', out)
     cal = res.getCalibration()
@@ -463,7 +531,7 @@ def find_maxima(imp):
     cal.setUnit('pixel')
     cal.frameInterval = 1.0
     res.setDimensions(1, 1, out.getSize())
-    return res
+    return res, (stat if by_area else None)
 
 
 def track(imp):
@@ -561,8 +629,13 @@ try:
             if imp is None:
                 raise Exception('Fiji could not open ' + kind)
             n = imp.getStackSize()
-            preprocess(imp)
-            mx = find_maxima(imp)
+            raw = preprocess(imp)
+            mx, st_area = find_maxima(imp, raw)
+            raw = None
+            if st_area:
+                kept = sorted(st_area[3])
+                say('AREA', name, stem, st_area[0], st_area[1], st_area[2],
+                    kept[len(kept) // 2] if kept else 0, kept[-1] if kept else 0)
             model = track(mx)
             ns, nt = export(model, os.path.join(dst, stem))
             say('OK', name, stem, n, ns, nt)

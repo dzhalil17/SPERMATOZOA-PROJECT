@@ -165,6 +165,19 @@ def main():
         g = root / 'out_one_fiji' / f.parent.parent.name / f.name
         assert same_tracking(f, g), f'2 Fiji и 1 Fiji дали разные {f.parent.name}/{f.name}'
     print('2 Fiji одновременно = 1 Fiji: те же споты, те же треки, те же признаки треков')
+    # пределы площади яркого пятна: точек не больше, чем без них, и не ноль; слишком тесный предел убирает почти всё
+    lines = []
+    trackmate.MIN_OBJECT_AREA, trackmate.MAX_OBJECT_AREA, trackmate.OBJECT_AREA_LEVEL = 3.0, 60.0, 100.0
+    area = trackmate.run(fiji, root / 'videos', root / 'out_area', log=lambda m: (lines.append(m), print(m)), n_procs=1)
+    trackmate.MAX_OBJECT_AREA = 4.0
+    tight = trackmate.run(fiji, root / 'videos', root / 'out_area_tight', log=print, n_procs=1)
+    trackmate.MIN_OBJECT_AREA = trackmate.MAX_OBJECT_AREA = trackmate.OBJECT_AREA_LEVEL = 0.0
+    assert len(area['ok']) == 2 and len(tight['ok']) == 2, (area, tight)
+    assert sum('убрано по площади' in m for m in lines) == 2, 'нет строки о площади'
+    n_all, n_area, n_tight = (sum(x[3] for x in r['ok']) for r in (one, area, tight))
+    print(f'спотов: без пределов {n_all}, площадь 3–60 px {n_area}, площадь 3–4 px {n_tight}')
+    assert 0.5 * n_all < n_area <= n_all, 'предел площади 3–60 px убрал слишком много или ничего не оставил'
+    assert n_tight < 0.5 * n_area, 'тесный предел площади не подействовал'
     if len(sys.argv) > 3:
         check_from_mpg(fiji, sys.argv[3], root)
     print('FIJI CHECK: OK')
