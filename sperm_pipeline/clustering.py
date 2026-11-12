@@ -62,6 +62,10 @@ IM_REF      = 'largest_slow'
 # IM_LIMIT_BY_RP — граница IM не дальше «середины» между IM и RP: среднего геометрического медиан скорости
 # кластеров IM и RP (берётся из самих кластеров, заданных чисел нет). Треки IM быстрее середины → шум.
 IM_LIMIT_BY_RP = False
+# IM_ALL_SLOW — все треки медленнее границы IM входят в IM, в каком бы кластере они ни оказались.
+# Граница та же (из самого IM-кластера, новых чисел нет). Нужна, когда HDBSCAN приклеивает неподвижные треки
+# со случайно высоким STR к большому быстрому кластеру (видео 4): иначе они уходят в RP, а оттуда в SP.
+IM_ALL_SLOW = True
 # RP_MODE — добор шума в быстрый кластер RP (быстрые прогрессивные). RP = самый большой из «быстрых» кластеров,
 # т.е. с медианой скорости выше медианы скорости всех треков видео (если таких нет — самый быстрый кластер).
 #   None       — не добирать (RP всё равно выделяется и подписывается);
@@ -248,6 +252,15 @@ def merge_immotile(df: pd.DataFrame, labels: np.ndarray):
     return np.array([remap.get(k, k) for k in new]), round(cut, 3)
 
 
+def take_all_slow(df: pd.DataFrame, labels: np.ndarray, cut: float) -> np.ndarray:
+    """IM_ALL_SLOW: все треки со скоростью ниже границы IM → IM (метка 0)."""
+    if not IM_ALL_SLOW or cut is None or not np.isfinite(cut):
+        return labels
+    new = labels.copy()
+    new[df['x'].values < cut] = 0
+    return new
+
+
 def name_of(k) -> str:
     return {-1: 'noise', 0: 'IM', RP: 'RP', NP: 'NP', RP_SLOW: 'RP_slow', SP: 'SP'}.get(k, f'C{k}')
 
@@ -322,6 +335,7 @@ def main():
         lab, params, prob = cluster(pooled)
         lab = assign_rp(pooled, lab, prob)
         lab, cut = merge_immotile(pooled, lab)
+        lab = take_all_slow(pooled, lab, cut)
         lab = assign_np(pooled, lab)
         rp_start = float(pooled['x'].values[lab == RP].min()) if (lab == RP).any() else np.nan
         lab, rp_cut = trim_rp(pooled, lab)
@@ -343,6 +357,7 @@ def main():
                 im2 = lab2 == 0
                 lab[(lab == 0) & ~im2] = -1          # не неподвижные по 2D-прогону → шум
                 lab[im2 & (lab != RP)] = 0            # неподвижные по 2D-прогону → IM
+            lab = take_all_slow(d, lab, cut)
             lab = assign_np(d, lab)
             rp_start = float(d['x'].values[lab == RP].min()) if (lab == RP).any() else np.nan
             lab, rp_cut = trim_rp(d, lab)
@@ -365,7 +380,7 @@ def main():
     wide = wide[['video', 'n_tracks', 'n_clusters', 'min_cluster_size_used', 'noise_pct', 'im_cut', 'rp_cut']
                 + [c for c in ['IM_pct', 'RP_pct', 'RP_slow_pct', 'SP_pct', 'NP_pct'] if c in wide] + cl_cols]
     params_df = pd.DataFrame([('X_COL', X_COL), ('Y_COL', Y_COL), ('Z_COL', Z_COL), ('WEIGHT_Z', WEIGHT_Z), ('IM_FROM_2D', IM_FROM_2D), ('MODE', MODE), ('SCALER', SCALER),
-                              ('WEIGHT_X', WEIGHT_X), ('WEIGHT_Y', WEIGHT_Y), ('IM_MERGE', IM_MERGE), ('IM_QUANTILE', IM_QUANTILE), ('IM_REF', IM_REF), ('IM_LIMIT_BY_RP', IM_LIMIT_BY_RP),
+                              ('WEIGHT_X', WEIGHT_X), ('WEIGHT_Y', WEIGHT_Y), ('IM_MERGE', IM_MERGE), ('IM_QUANTILE', IM_QUANTILE), ('IM_REF', IM_REF), ('IM_LIMIT_BY_RP', IM_LIMIT_BY_RP), ('IM_ALL_SLOW', IM_ALL_SLOW),
                               ('RP_MODE', RP_MODE), ('RP_PROB', RP_PROB), ('RP_QUANTILE', RP_QUANTILE),
                               ('RP_TRIM', RP_TRIM), ('SP_MODE', SP_MODE), ('NP_MODE', NP_MODE), ('NP_QUANTILE', NP_QUANTILE), ('SOFT_ASSIGN', SOFT_ASSIGN)]
                              + [(f'hdbscan.{k}', v) for k, v in HDBSCAN_PARAMS.items()], columns=['parameter', 'value'])

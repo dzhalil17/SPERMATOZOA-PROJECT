@@ -92,6 +92,7 @@ CLUSTERING = [
     ('IM_QUANTILE', 'IM: перцентиль скорости опорного кластера'),
     ('IM_REF', 'IM: опорный кластер', ['largest_slow', 'slowest']),
     ('IM_LIMIT_BY_RP', 'IM: граница не дальше середины IM–RP'),
+    ('IM_ALL_SLOW', 'IM: все треки медленнее границы IM → IM (из любого кластера)'),
     ('RP_MODE', 'RP: добор шума', ['quantile', 'prob', None]),
     ('RP_PROB', 'RP: порог вероятности (для prob)'),
     ('RP_QUANTILE', 'RP: перцентиль (для quantile)'),
