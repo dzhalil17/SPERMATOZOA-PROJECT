@@ -4,6 +4,7 @@ python tools/fiji_check.py "C:\\Fiji.app\\ImageJ-win64.exe" [папка] [ffmpeg
 Два видео: «synthetic» — стек .tif, «synthetic_png» — папка кадров PNG (как SEQUENCES IN ORDER) + папка _rejected.
 С ffmpeg — ещё прогон с шага 00: 01.mpg (чёрные кадры, «снег», белая вспышка между двумя хорошими кусками) →
 кадры → 2 отрезка + _rejected → TrackMate → … → кластеризация."""
+import json
 import subprocess
 import sys
 import tempfile
@@ -77,8 +78,8 @@ def check_from_mpg(fiji: str, ffmpeg: str, root: Path):
     cfg['trackmate'].update(GAUSSIAN_SIGMA=1.0, NOISE_TOLERANCE=40.0, LOG_QUALITY_THRESHOLD=1.0,
                             LINKING_MAX_DISTANCE=15.0, GAP_CLOSING_MAX_DISTANCE=15.0, MAX_FRAME_GAP=2)
     cfg['general'].update(step_frames=True, mpg_dir=str(root / 'mpg'), ffmpeg_exe=ffmpeg, fiji_exe=fiji,
-                          output_dir=str(root / 'out_mpg'), n_workers=2)
-    pipeline.run(cfg, log=lambda m: print(m, flush=True))
+                          output_dir=str(root / 'out_mpg'), n_workers=2, frames_one_by_one=False)
+    pipeline.run(json.loads(json.dumps(cfg)), log=lambda m: print(m, flush=True))
     vdir = root / 'out_mpg' / '01' / pipeline.DIR_FRAMES          # 01.mpg → папка «01»
     segs = sorted(p.name for p in vdir.iterdir() if p.is_dir() and not p.name.startswith('_'))
     n_rej = len(list((vdir / '_rejected').glob('*.png')))
@@ -92,6 +93,24 @@ def check_from_mpg(fiji: str, ffmpeg: str, root: Path):
         assert (root / 'out_mpg' / '01' / d).is_dir(), f'нет папки 01\\{d}'
     assert (root / 'out_mpg' / '01' / pipeline.DIR_CLUSTER / 'итог 01.xlsx').exists()
     print('папки результатов:', sorted(p.name for p in (root / 'out_mpg').iterdir()))
+
+    # режим «по одному видео»: те же треки, кадры удалены, повторный запуск пропускает готовые видео
+    import shutil
+    shutil.copy(root / 'mpg' / '01.mpg', root / 'mpg' / '02.mpg')
+    cfg['general'].update(output_dir=str(root / 'out_obo'), frames_one_by_one=True)
+    lines = []
+    for _ in range(2):
+        lines.clear()
+        pipeline.run(json.loads(json.dumps(cfg)), log=lambda m: (lines.append(m), print(m, flush=True)))
+    obo = pd.read_excel(root / 'out_obo' / pipeline.DIR_ALL / pipeline.SUMMARY, dtype={'video': str})
+    print(obo.to_string(index=False))
+    assert list(obo['video'].astype(str)) == ['01', '02']
+    assert set(obo['n_tracks']) == {summ['n_tracks'].iloc[0]}, 'по одному видео — другое число треков'
+    for v in ('01', '02'):
+        assert not (root / 'out_obo' / v / pipeline.DIR_FRAMES).exists(), f'кадры {v} не удалены'
+        assert (root / 'out_obo' / v / pipeline.DIR_TRACKMATE / pipeline.DONE_MARK).exists()
+    assert sum('уже был с этими параметрами' in m for m in lines) == 2, 'повторный запуск не пропустил видео'
+    print('по одному видео: OK')
 
 
 def same_tracking(spots_a: Path, spots_b: Path) -> bool:

@@ -151,9 +151,11 @@ def split_folder(frames_dir, dry_run):
     print(f"{len(segments)} папок, {len(rest)} кадров в {REJECT_FOLDER}.")
 
 
-def main(video_dir, output_dir):
+def main(video_dir, output_dir, only=None):
     videos = [f for f in os.listdir(video_dir)
               if os.path.isfile(os.path.join(video_dir, f)) and f.lower().endswith(VIDEO_EXTENSIONS)]
+    if only is not None:                               # [SpermPipeline] режим «по одному видео»
+        videos = [f for f in videos if f in only]
     videos.sort(key=natural_key)
     if not videos:
         print(f"Нет видео в: {video_dir}")
@@ -233,8 +235,9 @@ def list_videos(video_dir):
                   key=natural_key)
 
 
-def run(ffmpeg_exe, video_dir, output_dir, log=print, stop=lambda: False, dest=None):
-    """dest(имя файла видео) → папка его кадров; без dest — как в исходном скрипте: output_dir\\«1 video»."""
+def run(ffmpeg_exe, video_dir, output_dir, log=print, stop=lambda: False, dest=None, only=None, quiet=False):
+    """dest(имя файла видео) → папка его кадров; без dest — как в исходном скрипте: output_dir\\«1 video».
+    only — список имён файлов видео: нарезать только их (режим «по одному видео»)."""
     global FFMPEG, _STOP, _DEST
     import contextlib
     exe = find_ffmpeg(ffmpeg_exe)
@@ -244,7 +247,8 @@ def run(ffmpeg_exe, video_dir, output_dir, log=print, stop=lambda: False, dest=N
         raise FileNotFoundError(f"Нет папки с видео: {video_dir}")
     FFMPEG, _STOP, _DEST = exe, stop, dest
     os.makedirs(output_dir, exist_ok=True)
-    log(f"ffmpeg: {exe}")
+    if not quiet:
+        log(f"ffmpeg: {exe}")
     real = sys.stdout
 
     def to_log(m):                    # log может сам печатать в stdout — пишем туда, а не в перехватчик
@@ -252,7 +256,7 @@ def run(ffmpeg_exe, video_dir, output_dir, log=print, stop=lambda: False, dest=N
             log(m)
     w = _LineLog(to_log)
     with contextlib.redirect_stdout(w):
-        main(video_dir, output_dir)
+        main(video_dir, output_dir, only)
     w.flush()
     return output_dir
 

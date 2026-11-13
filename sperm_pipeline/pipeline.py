@@ -23,6 +23,7 @@ import contextlib
 import io
 import json
 import re
+import shutil
 import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor
@@ -142,6 +143,81 @@ def run_segment(job: dict) -> dict:
 
 
 # =============================================================================
+# шаги 00 + 0 по одному видео: кадры → TrackMate → кадры удаляются
+# =============================================================================
+DONE_MARK = '_готово, кадры удалены.json'
+CUT_MARK = '_кадры нарезаны приложением.txt'
+
+
+def one_by_one(g: dict, out_root: Path, all_dir: Path, frames_of, vdir, log, stop) -> list:
+    """Видео за видео: нарезка → TrackMate → удаление кадров этого видео. На диске одновременно лежат кадры
+    только одного видео (~2 ГБ), а не всех. Видео, у которых TrackMate уже прошёл с теми же параметрами
+    (метка DONE_MARK в папке CSV), при повторном запуске пропускаются — прогон можно продолжить после сбоя.
+    Кадры, которые лежали в папке ещё до запуска, не удаляются. → [(видео, папка с CSV TrackMate)]"""
+    from . import frames, trackmate
+    cur = {k: v for k, v in trackmate.params().items() if k != 'VIDEO_EXT'}
+    files = frames.list_videos(g['mpg_dir'])
+    log(f'Режим «по одному видео»: {len(files)} видео; кадры каждого удаляются после TrackMate')
+    out, failed = [], []
+    t0 = time.time()
+    for k, f in enumerate(files, 1):
+        if stop():
+            raise Stopped()
+        v = Path(f).stem
+        fdir = Path(frames_of(f))
+        tm_dst = vdir(v) / DIR_TRACKMATE
+        mark = tm_dst / DONE_MARK
+        try:
+            if json.loads(mark.read_text(encoding='utf-8')) == cur:
+                log(f'\n[{k}/{len(files)}] {f}: TrackMate уже был с этими параметрами — пропускаю')
+                out.append((v, tm_dst))
+                continue
+        except Exception:
+            pass
+        log(f'\n[{k}/{len(files)}] {f}')
+        ours = tm_dst / CUT_MARK               # кадры нарезаны этим режимом (в прошлый раз TrackMate не дошёл)
+        had_frames = fdir.is_dir() and any(fdir.iterdir()) and not ours.exists()
+        try:
+            frames.run(g.get('ffmpeg_exe', ''), g['mpg_dir'], str(out_root), log, stop,
+                       dest=lambda x: str(frames_of(x)), only=[f], quiet=k > 1)
+        except KeyboardInterrupt:
+            raise Stopped()
+        if not fdir.is_dir():
+            log(f'  {f}: кадров нет (ошибка ffmpeg?) — пропускаю')
+            failed.append(f)
+            continue
+        if not had_frames:
+            tm_dst.mkdir(parents=True, exist_ok=True)
+            ours.write_text(str(fdir), encoding='utf-8')
+        res = trackmate.run(g.get('fiji_exe', ''), [(v, fdir)], all_dir / 'журналы Fiji', log, stop,
+                            raise_if_none=False, n_procs=int(g.get('fiji_procs') or 1), dest=lambda _: tm_dst)
+        if stop():
+            raise Stopped()
+        n_ok = len(res['ok']) + len(res['already'])
+        if res['bad'] or not n_ok:
+            log(f'  {f}: TrackMate с ошибками (готово {n_ok}, ошибок {len(res["bad"])}) — кадры оставляю: {fdir}')
+            failed.append(f)
+            if n_ok:
+                out.append((v, tm_dst))
+            continue
+        mark.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding='utf-8')
+        out.append((v, tm_dst))
+        if had_frames:
+            log(f'  кадры лежали в {fdir} ещё до запуска — не удаляю')
+        elif fdir.name in (DIR_FRAMES, v) and fdir != out_root:
+            shutil.rmtree(fdir, ignore_errors=True)
+            log(f'  кадры удалены: {fdir}')
+            ours.unlink(missing_ok=True)
+        left = (time.time() - t0) / k * (len(files) - k)
+        log(f'  прошло {(time.time() - t0) / 60:.0f} мин, осталось примерно {left / 60:.0f} мин')
+    if failed:
+        log(f'\nНе прошли нарезку/TrackMate: {len(failed)} — {", ".join(failed)}')
+    if not out:
+        raise RuntimeError('Ни одно видео не прошло TrackMate — см. журнал выше и журналы Fiji')
+    return out
+
+
+# =============================================================================
 # весь прогон
 # =============================================================================
 
@@ -171,6 +247,7 @@ def run(cfg: dict, log=print, stop=lambda: False) -> Path:
 
     # ---------- 00. нарезка видео на кадры и отрезки ----------
     tm_src = None
+    raw_videos = None                          # [(видео, папка с CSV TrackMate)]
     if g.get('step_frames'):
         from . import frames
         if not g.get('mpg_dir'):
@@ -182,20 +259,25 @@ def run(cfg: dict, log=print, stop=lambda: False) -> Path:
             return custom / v if custom else vdir(v) / DIR_FRAMES
         log(f'\n=== 00. НАРЕЗКА ВИДЕО НА КАДРЫ (ffmpeg) И ОТРЕЗКИ ===')
         log(f'Кадры: {custom or ("<папка результатов>" + chr(92) + "<видео>" + chr(92) + DIR_FRAMES)}')
-        try:
-            frames.run(g.get('ffmpeg_exe', ''), g['mpg_dir'], str(out_root), log, stop,
-                       dest=lambda f: str(frames_of(f)))
-        except KeyboardInterrupt:
-            raise Stopped()
-        tm_src = [(Path(f).stem, frames_of(f)) for f in frames.list_videos(g['mpg_dir'])
-                  if frames_of(f).is_dir()]
         g['step_trackmate'] = True
+        if g.get('frames_one_by_one'):
+            raw_videos = one_by_one(g, out_root, all_dir, frames_of, vdir, log, stop)
+            tm_src = 'done'
+        else:
+            try:
+                frames.run(g.get('ffmpeg_exe', ''), g['mpg_dir'], str(out_root), log, stop,
+                           dest=lambda f: str(frames_of(f)))
+            except KeyboardInterrupt:
+                raise Stopped()
+            tm_src = [(Path(f).stem, frames_of(f)) for f in frames.list_videos(g['mpg_dir'])
+                      if frames_of(f).is_dir()]
     if stop():
         raise Stopped()
 
     # ---------- 0. TrackMate в Fiji без окна ----------
-    raw_videos = None                          # [(видео, папка с CSV TrackMate)]
-    if g.get('step_trackmate'):
+    if tm_src == 'done':
+        g['step_tables'] = True                # TrackMate уже прошёл внутри шага 00 (по одному видео)
+    elif g.get('step_trackmate'):
         from . import trackmate
         if tm_src is None:
             if not g.get('videos_dir'):

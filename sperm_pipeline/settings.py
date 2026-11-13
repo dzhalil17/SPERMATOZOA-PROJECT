@@ -109,6 +109,7 @@ GENERAL_DEFAULTS = {
     'mpg_dir': '',          # видео .mpg — для шага 00 (нарезка)
     'ffmpeg_exe': '',       # ffmpeg.exe; пусто — путь из скрипта нарезки или ffmpeg из PATH
     'frames_dir': '',       # куда класть кадры; пусто — «00 КАДРЫ» в папке результатов
+    'frames_one_by_one': True,   # шаги 00+0 видео за видео, кадры удаляются после TrackMate (место на диске)
     'videos_dir': '',       # папки с кадрами (или .tif/.avi) — вход шага 0, если шаг 00 выключен
     'fiji_exe': '',         # ImageJ-win64.exe; пусто — ищется в обычных местах
     'fiji_procs': trackmate.default_procs(),   # сколько Fiji запускать одновременно (шаг 0)

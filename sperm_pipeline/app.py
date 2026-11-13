@@ -107,6 +107,11 @@ class App(tk.Tk):
         r += 1
         self.e_frames = folder_row('frames_dir', 'Папка для кадров:',
                                    'пусто — «<видео>\\00 КАДРЫ» в папке результатов; уже нарезанные видео заново не режутся')
+        self.c_one = ttk.Checkbutton(f, variable=self.gv['frames_one_by_one'],
+                                     text='По одному видео: нарезать → TrackMate → удалить кадры, потом следующее '
+                                          '(на диске кадры только одного видео, ~2 ГБ; повторный запуск продолжит с места сбоя)')
+        self.c_one.grid(row=r, column=1, columnspan=2, sticky='w')
+        r += 1
         step_row('step_trackmate', '0. TrackMate в Fiji без окна: 8-bit → Gaussian → контраст → Find Maxima → LoG + LAP')
         self.e_videos = folder_row('videos_dir', 'Видео / кадры:', 'отрезок = папка с кадрами (png/jpg/tif) или файл .tif/.avi; папка над ними = видео; «_rejected» пропускается')
         ttk.Label(f, text='Fiji (ImageJ-win64.exe):').grid(row=r, column=0, sticky='w', padx=(24, 4))
@@ -166,7 +171,7 @@ class App(tk.Tk):
         fr = self.gv['step_frames'].get()
         if fr:
             self.gv['step_trackmate'].set(True)       # кадры из шага 00 идут в шаг 0
-        for e in (self.e_mpg, self.e_ffmpeg, self.e_frames):
+        for e in (self.e_mpg, self.e_ffmpeg, self.e_frames, self.c_one):
             e.configure(state='normal' if fr else 'disabled')
         if fr and not self.gv['ffmpeg_exe'].get():
             from .frames import find_ffmpeg
