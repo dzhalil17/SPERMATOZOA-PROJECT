@@ -59,14 +59,43 @@ FIJI_CANDIDATES = [
     r'D:\Fiji.app\fiji-windows-x64.exe', r'D:\Fiji\fiji-windows-x64.exe',
     r'~\Fiji.app\ImageJ-win64.exe', r'~\Desktop\Fiji.app\ImageJ-win64.exe', r'~\Downloads\Fiji.app\ImageJ-win64.exe',
     r'~\Fiji.app\fiji-windows-x64.exe', r'~\Desktop\Fiji.app\fiji-windows-x64.exe',
+    # macOS: можно указать саму папку Fiji.app — программа запуска внутри найдётся (resolve_fiji)
+    '/Applications/Fiji.app', '~/Applications/Fiji.app', '~/Fiji.app', '~/Desktop/Fiji.app', '~/Downloads/Fiji.app',
 ]
+# программы запуска Fiji внутри Fiji.app на macOS / Linux (старый лаунчер ImageJ и новый Jaunch)
+MAC_LAUNCHERS = ('Contents/MacOS/ImageJ-macosx', 'Contents/MacOS/fiji-macos-arm64', 'Contents/MacOS/fiji-macos',
+                 'Contents/MacOS/fiji-macos-universal', 'Contents/MacOS/fiji-macos-x64', 'fiji-macos-arm64',
+                 'fiji-macos', 'ImageJ-macosx', 'ImageJ-linux64', 'fiji-linux-x64', 'fiji-linux-arm64')
+
+
+def resolve_fiji(path: str) -> str:
+    """Путь к программе запуска Fiji. На Mac можно дать папку Fiji.app (или любую папку с Fiji) — внутри ищется
+    ImageJ-macosx / fiji-macos-*; программа запуска Windows (.exe) или уже найденный файл возвращаются как есть."""
+    if not path:
+        return ''
+    p = Path(os.path.expanduser(path))
+    if p.is_file():
+        return str(p)
+    if p.is_dir():
+        for name in MAC_LAUNCHERS:
+            f = p / name
+            if f.is_file():
+                return str(f)
+        for d in (p / 'Contents' / 'MacOS', p):                       # другие имена — первый исполняемый файл
+            if d.is_dir():
+                for f in sorted(d.iterdir()):
+                    if f.is_file() and os.access(f, os.X_OK) and f.name.lower().startswith(('fiji', 'imagej')):
+                        return str(f)
+    return ''
 
 
 def find_fiji() -> str:
     for c in FIJI_CANDIDATES:
-        p = Path(os.path.expanduser(c))
-        if p.exists():
-            return str(p)
+        if os.name == 'nt' and c.startswith('/') or os.name != 'nt' and '\\' in c:
+            continue
+        f = resolve_fiji(c)
+        if f:
+            return f
     return ''
 
 
@@ -213,9 +242,10 @@ def run(fiji_exe: str, videos_dir, out_dir: Path, log=print, stop=lambda: False,
     dest(видео) — куда класть CSV этого видео (по умолчанию out_dir\\видео); rename — имя видео по имени папки.
     В out_dir — служебное: скрипт Fiji, журналы. Отрезки, у которых уже есть оба CSV, посчитанные с теми же
     параметрами, не пересчитываются (продолжение после сбоя)."""
-    fiji = fiji_exe or find_fiji()
+    fiji = resolve_fiji(fiji_exe) or find_fiji()
     if not fiji or not Path(fiji).exists():
-        raise FileNotFoundError('Не найдена Fiji: укажите путь к ImageJ-win64.exe на вкладке «Запуск»')
+        raise FileNotFoundError('Не найдена Fiji: укажите на вкладке «Запуск» путь к ImageJ-win64.exe '
+                                '(на Mac — к Fiji.app)')
     out_dir = Path(out_dir)
     dest = dest or (lambda v: out_dir / v)
     if isinstance(videos_dir, (list, tuple)):

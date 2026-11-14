@@ -204,7 +204,8 @@ FFMPEG_DEFAULT = FFMPEG
 
 def find_ffmpeg(path=""):
     import shutil as _sh
-    for c in (path, FFMPEG_DEFAULT, _sh.which("ffmpeg") or ""):
+    # на Mac программа, открытая из Finder, не видит PATH Homebrew — смотрим его папки сами
+    for c in (path, FFMPEG_DEFAULT, _sh.which("ffmpeg") or "", "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
         if c and os.path.isfile(c):
             return c
     return ""
