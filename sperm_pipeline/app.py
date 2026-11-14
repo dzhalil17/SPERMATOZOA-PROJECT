@@ -65,7 +65,7 @@ class App(tk.Tk):
         for sec, title, spec in [('frames', 'Нарезка', S.FRAMES), ('trackmate', 'TrackMate', S.TRACKMATE),
                                  ('filtration', 'Супер-фильтрация', S.FILTRATION),
                                  ('casa', 'CASA-метрики', S.CASA),
-                                 ('clustering', 'Кластеризация', S.CLUSTERING)]:
+                                 ('clustering', 'Кластеризация', S.CLUSTERING), ('kde', 'KDE', S.KDE)]:
             self._param_tab(nb, sec, title, spec)
         self.protocol('WM_DELETE_WINDOW', self._close)
         self.after(150, self._drain)
@@ -136,6 +136,7 @@ class App(tk.Tk):
         step_row('step_cluster', '5. Кластеризация HDBSCAN (IM / RP / SP / NP)')
         self.e_casa = folder_row('casa_dir', 'Таблицы CASA TRACKS:',
                                  'только если шаги 2–4 выключены, например ваша папка CASA TRACKS v2')
+        step_row('step_kde', '6. KDE: плотность скорости каждого видео + вклады классов и границы кластеризации')
         ttk.Separator(f).grid(row=r, column=0, columnspan=3, sticky='we', pady=8)
         r += 1
         ttk.Label(f, text='Папка результатов:').grid(row=r, column=0, sticky='w')
@@ -188,7 +189,8 @@ class App(tk.Tk):
         self.e_raw.configure(state='normal' if t and not tm else 'disabled')
         self.e_spots.configure(state='normal' if flt and not t else 'disabled')
         self.e_tracks.configure(state='normal' if flt and not t else 'disabled')
-        self.e_casa.configure(state='normal' if cl and not flt else 'disabled')
+        kd = self.gv['step_kde'].get()
+        self.e_casa.configure(state='normal' if (cl or kd) and not flt else 'disabled')
 
     def _pick_exe(self, key, title):
         f = filedialog.askopenfilename(title=title, filetypes=[('Программа', '*.exe'), ('Все', '*.*')])

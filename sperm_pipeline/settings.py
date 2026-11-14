@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 
-from . import filtration, casa, clustering, trackmate, frames
+from . import filtration, casa, clustering, trackmate, frames, kde
 
 # (модуль, имя, подпись). Тип значения определяется по значению по умолчанию; choices — список вариантов.
 FRAMES = [
@@ -105,6 +105,16 @@ CLUSTERING = [
     ('SAVE_PLOTS', 'Сохранять графики'),
     ('SAVE_TRACK_LABELS', 'Сохранять метки треков'),
 ]
+KDE = [
+    ('X_COL', 'По какой колонке строить плотность'),
+    ('BANDWIDTH_DIV', 'Ширина ядра = std / это число'),
+    ('GRID_POINTS', 'Точек на кривой'),
+    ('REFLECT_AT_ZERO', 'Отражать ядра от нуля (скорость не бывает < 0)'),
+    ('LOG_X', 'Ось X в log10'),
+    ('BY_CLUSTER', 'Вклады классов из кластеризации'),
+    ('SHOW_CUTS', 'Линии границ im_cut / rp_cut'),
+    ('XLIM_QUANTILE', 'Ось X графика до перцентиля скорости (1 — всё)'),
+]
 GENERAL_DEFAULTS = {
     'mpg_dir': '',          # видео .mpg — для шага 00 (нарезка)
     'ffmpeg_exe': '',       # ffmpeg.exe; пусто — путь из скрипта нарезки или ffmpeg из PATH
@@ -123,6 +133,7 @@ GENERAL_DEFAULTS = {
     'step_tables': True,
     'step_filter': True,
     'step_cluster': True,
+    'step_kde': True,
     'n_workers': max(1, min(8, (os.cpu_count() or 2) - 1)),
 }
 
@@ -133,7 +144,7 @@ def _module_default(mod, name):
     return getattr(mod, name)
 
 
-SECTIONS = [('frames', frames, FRAMES), ('trackmate', trackmate, TRACKMATE), ('filtration', filtration, FILTRATION), ('casa', casa, CASA), ('clustering', clustering, CLUSTERING)]
+SECTIONS = [('frames', frames, FRAMES), ('trackmate', trackmate, TRACKMATE), ('filtration', filtration, FILTRATION), ('casa', casa, CASA), ('clustering', clustering, CLUSTERING), ('kde', kde, KDE)]
 
 # значения по умолчанию снимаются при импорте, до того как приложение что-либо поменяет
 DEFAULTS = {sec: {item[0]: _module_default(mod, item[0]) for item in spec} for sec, mod, spec in SECTIONS}

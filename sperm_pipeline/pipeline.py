@@ -8,13 +8,14 @@ r"""
   3 СКЛЕЙКА        таблицы треков всех отрезков одного видео в одну (CONCATTING.py)
   4 CASA           CASA-метрики по точкам итоговых треков (casa_metrics.py v2)      → casa.py
   5 КЛАСТЕРИЗАЦИЯ  HDBSCAN по VAP/STR/LIN (hdbscan casa 2d.py)                       → clustering.py
+  6 KDE            плотность скорости каждого видео + вклады классов (KDE studying.py) → kde.py
 
 Шаги 2–4 идут за один проход по каждому отрезку: фильтрация сразу отдаёт точки итоговых треков,
 и метрики считаются по ним (раньше casa_metrics.py ради этого заново прогонял фильтрацию).
 
 Раскладка результатов — по папке на видео, имя как у файла видео (01.mpg → «01»):
   <папка результатов>\01\00 КАДРЫ, 0 TRACKMATE, 1 ТАБЛИЦЫ, 2 ФИЛЬТРАЦИЯ, 3 СКЛЕЙКА, 4 CASA TRACKS, 4 CASA SPOTS,
-                        5 КЛАСТЕРИЗАЦИЯ (график и итог этого видео)
+                        5 КЛАСТЕРИЗАЦИЯ (график и итог этого видео), 6 KDE
   <папка результатов>\_ВСЕ ВИДЕО\  сводка по всем видео, проверка отрезков, настройки прогона, журналы Fiji
 """
 from __future__ import annotations
@@ -43,6 +44,7 @@ DIR_CONCAT = '3 СКЛЕЙКА'
 DIR_CASA_TRACKS = '4 CASA TRACKS'
 DIR_CASA_SPOTS = '4 CASA SPOTS'
 DIR_CLUSTER = '5 КЛАСТЕРИЗАЦИЯ'
+DIR_KDE = '6 KDE'
 DIR_ALL = '_ВСЕ ВИДЕО'
 SUMMARY = 'summary_all_videos.xlsx'
 
@@ -340,6 +342,16 @@ def run(cfg: dict, log=print, stop=lambda: False) -> Path:
         if not casa_files:
             raise ValueError('Шаг 5 включён, но нет входа: включите шаг 2 или задайте папку CASA TRACKS')
         cluster(cfg, casa_files, out_root, log)
+    if stop():
+        raise Stopped()
+
+    # ---------- 6. KDE ----------
+    if g.get('step_kde'):
+        if not casa_files:
+            raise ValueError('Шаг 6 включён, но нет входа: включите шаг 2 или задайте папку CASA TRACKS')
+        from . import kde
+        log(f'\n=== 6. KDE (плотность скорости) ===')
+        kde.run(casa_files, out_root / DIR_ALL, lambda v: out_root / v / DIR_KDE, log, SUMMARY)
     log(f'\nГОТОВО. Результаты: {out_root} (папка на каждое видео; сводка — «{DIR_ALL}»)')
     return out_root
 
