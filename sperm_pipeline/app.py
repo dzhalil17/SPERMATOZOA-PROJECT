@@ -1,6 +1,7 @@
 """Окно приложения SpermPipeline (tkinter — входит в Python, ничего ставить не надо)."""
 from __future__ import annotations
 
+import json
 import os
 import queue
 import subprocess
@@ -8,6 +9,7 @@ import sys
 import threading
 import traceback
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
 
 from . import settings as S
@@ -156,6 +158,8 @@ class App(tk.Tk):
         self.b_stop.pack(side='left', padx=6)
         ttk.Button(bar, text='Открыть папку результатов', command=self._open_out).pack(side='left', padx=6)
         ttk.Button(bar, text='Настройки по умолчанию', command=self._reset).pack(side='left', padx=6)
+        ttk.Button(bar, text='Сохранить настройки в файл…', command=self._export).pack(side='left', padx=6)
+        ttk.Button(bar, text='Загрузить настройки из файла…', command=self._import).pack(side='left', padx=6)
 
         logf = ttk.Frame(f)
         logf.grid(row=r, column=0, columnspan=3, sticky='nsew')
@@ -256,6 +260,53 @@ class App(tk.Tk):
             return
         for (sec, name), (var, default) in self.vars.items():
             var.set(default if isinstance(default, bool) else _to_text(default))
+
+    # пути к папкам и программам и число процессов у каждого компьютера свои — при загрузке не трогаем
+    LOCAL_KEYS = ('mpg_dir', 'ffmpeg_exe', 'frames_dir', 'videos_dir', 'fiji_exe', 'raw_dir', 'spots_dir', 'tracks_dir',
+                  'casa_dir', 'output_dir', 'fiji_procs', 'n_workers')
+
+    def _export(self):
+        try:
+            cfg = self._collect()
+        except ValueError as e:
+            messagebox.showerror('Настройки', str(e))
+            return
+        f = filedialog.asksaveasfilename(title='Сохранить настройки', defaultextension='.json',
+                                         initialfile='SpermPipeline настройки.json', filetypes=[('JSON', '*.json')])
+        if f:
+            Path(f).write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
+            messagebox.showinfo('Настройки', f'Сохранено: {f}')
+
+    def _import(self):
+        """Файл из «Сохранить настройки…» или «настройки <дата>.json» из папки «_ВСЕ ВИДЕО» любого прогона."""
+        f = filedialog.askopenfilename(title='Загрузить настройки', filetypes=[('JSON', '*.json'), ('Все', '*.*')])
+        if not f:
+            return
+        try:
+            data = json.loads(Path(f).read_text(encoding='utf-8'))
+        except Exception as e:
+            messagebox.showerror('Настройки', f'Не читается: {e}')
+            return
+        n, unknown = 0, []
+        for sec, vals in data.items():
+            if not isinstance(vals, dict):
+                continue
+            for name, v in vals.items():
+                if sec == 'general':
+                    if name in self.LOCAL_KEYS or name not in self.gv:
+                        continue
+                    self.gv[name].set(bool(v) if isinstance(self.gv[name], tk.BooleanVar) else str(v))
+                    n += 1
+                elif (sec, name) in self.vars:
+                    var, default = self.vars[(sec, name)]
+                    var.set(bool(v) if isinstance(default, bool) else _to_text(v))
+                    n += 1
+                else:
+                    unknown.append(f'{sec}.{name}')
+        self._sync()
+        messagebox.showinfo('Настройки', f'Загружено параметров: {n}. Пути к папкам и программам не менялись — '
+                                         f'проверьте их на вкладке «Запуск».'
+                            + (f'\nНеизвестные (пропущены): {", ".join(unknown)}' if unknown else ''))
 
     # ------------------------------------------------------------------ запуск
     def _start(self):
