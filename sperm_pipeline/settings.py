@@ -107,7 +107,8 @@ CLUSTERING = [
 ]
 KDE = [
     ('X_COL', 'По какой колонке строить плотность'),
-    ('BANDWIDTH_DIV', 'Ширина ядра = std / это число'),
+    ('BANDWIDTH_RULE', 'Ширина ядра', ['std/div', 'scott', 'silverman']),
+    ('BANDWIDTH_DIV', 'Для std/div: ширина = std / это число'),
     ('GRID_POINTS', 'Точек на кривой'),
     ('REFLECT_AT_ZERO', 'Отражать ядра от нуля (скорость не бывает < 0)'),
     ('LOG_X', 'Ось X в log10'),

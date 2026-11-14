@@ -1,7 +1,7 @@
 """
 Шаг 6 — KDE: плотность распределения скорости треков каждого видео (по скрипту «KDE studying.py»).
 
-Ядро гауссово, ширина = std / BANDWIDTH_DIV (в исходном скрипте std / 4), сетка — от 0 до самой большой скорости.
+Ядро гауссово, ширина = std / BANDWIDTH_DIV (в исходном скрипте std / 4) или по правилу Скотта / Сильвермана, сетка — от 0 до самой большой скорости.
 После кластеризации на тот же график ложатся вклады классов (IM, RP, SP, NP, шум): плотность класса × его доля,
 так что сумма вкладов = общая кривая. Пунктиром — границы im_cut и rp_cut, которые нашла кластеризация.
 
@@ -19,7 +19,10 @@ import pandas as pd
 # ▶ НАСТРОЙКИ
 # =============================================================================
 X_COL = 'CASA_VAP'      # по какой колонке строить плотность
-BANDWIDTH_DIV = 4.0     # ширина ядра = std / BANDWIDTH_DIV
+BANDWIDTH_RULE = 'std/div'  # ширина ядра: 'std/div' — std / BANDWIDTH_DIV (как в KDE studying.py);
+                            # 'scott' — std·n^(-1/5) (как в scipy); 'silverman' — 0.9·min(std, IQR/1.34)·n^(-1/5)
+                            # (Сильверман берёт межквартильный размах, поэтому меньше зависит от быстрых выбросов)
+BANDWIDTH_DIV = 4.0     # для 'std/div'
 GRID_POINTS = 512       # точек на кривой
 REFLECT_AT_ZERO = True  # скорость не бывает < 0: часть ядра, ушедшая за 0, отражается обратно.
                         # Без этого пик неподвижных у нуля занижен почти вдвое (половина его ядер — «за нулём»).
@@ -46,6 +49,21 @@ def density(x: np.ndarray, grid: np.ndarray, bw: float, lo: float | None) -> np.
         if lo is not None:
             out += np.exp(-0.5 * ((grid[None, :] - (2 * lo - xs)) / bw) ** 2).sum(0)
     return out / (len(x) * bw * np.sqrt(2 * np.pi))
+
+
+def bandwidth(x: np.ndarray) -> float:
+    n, sd = len(x), float(np.std(x))
+    if BANDWIDTH_RULE == 'scott':
+        return float(np.std(x, ddof=1)) * n ** (-1 / 5)        # как scipy.stats.gaussian_kde(bw_method='scott')
+    if BANDWIDTH_RULE == 'silverman':
+        iqr = float(np.subtract(*np.quantile(x, [0.75, 0.25])))
+        spread = min(sd, iqr / 1.34) if iqr > 0 else sd
+        return 0.9 * spread * n ** (-1 / 5)
+    return sd / BANDWIDTH_DIV
+
+
+def rule_name() -> str:
+    return f'std/{BANDWIDTH_DIV:g}' if BANDWIDTH_RULE == 'std/div' else BANDWIDTH_RULE
 
 
 def peaks_and_dip(grid: np.ndarray, d: np.ndarray):
@@ -77,7 +95,7 @@ def one_video(v: str, x: np.ndarray, classes: np.ndarray | None, cuts: dict, out
     n = len(x)
     if n < 2:
         return None
-    bw = float(np.std(x)) / BANDWIDTH_DIV
+    bw = bandwidth(x)
     if bw <= 0:
         return None
     lo = None if LOG_X or not REFLECT_AT_ZERO else 0.0
@@ -106,7 +124,7 @@ def one_video(v: str, x: np.ndarray, classes: np.ndarray | None, cuts: dict, out
     pk, dip = peaks_and_dip(grid, total)
     ax.set_xlabel(f'{"log10 " if LOG_X else ""}{X_COL} (px/frame)')
     ax.set_ylabel('плотность')
-    ax.set_title(f'{v}: KDE, ширина ядра {bw:.3g} (std/{BANDWIDTH_DIV:g})', fontsize=10)
+    ax.set_title(f'{v}: KDE, ширина ядра {bw:.3g} ({rule_name()})', fontsize=10)
     ax.set_ylim(bottom=0)
     if 0 < XLIM_QUANTILE < 1:
         ax.set_xlim(start, max(float(np.quantile(x, XLIM_QUANTILE)) * 1.05, grid[1]))
@@ -117,7 +135,7 @@ def one_video(v: str, x: np.ndarray, classes: np.ndarray | None, cuts: dict, out
     plt.close(fig)
     pd.DataFrame(table).to_excel(out_dir / f'KDE {v}.xlsx', index=False)
     un = (lambda p: 10 ** p) if LOG_X else (lambda p: p)
-    return {'video': v, 'n_tracks': n, 'bandwidth': round(bw, 4), 'n_peaks': len(pk),
+    return {'video': v, 'n_tracks': n, 'rule': rule_name(), 'bandwidth': round(bw, 4), 'n_peaks': len(pk),
             'peak_1': round(un(pk[0]), 3) if pk else None, 'peak_2': round(un(pk[1]), 3) if len(pk) > 1 else None,
             'dip_1_2': round(dip, 3) if dip is not None else None,
             'im_cut': cuts.get('im_cut'), 'rp_cut': cuts.get('rp_cut')}
