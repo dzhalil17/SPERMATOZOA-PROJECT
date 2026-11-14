@@ -48,6 +48,7 @@ LINKING_MAX_DISTANCE = 40.0
 GAP_CLOSING_MAX_DISTANCE = 40.0
 MAX_FRAME_GAP = 20
 VIDEO_EXT = '.tif .tiff .avi'
+FIJI_TIMEOUT_MIN = 20.0     # сторож: Fiji не сообщает прогресса столько минут — снять, отрезок в ошибки, дальше (0 — ждать вечно)
 FRAME_EXT = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff'}   # кадры в папке-отрезке (как в плагине)
 _RANGE = re.compile(r'^\d+-\d+')
 
@@ -296,50 +297,88 @@ def run(fiji_exe: str, videos_dir, out_dir: Path, log=print, stop=lambda: False,
     log(f'Запускаю Fiji: {n} одновременно, у каждой {heap_mb / 1024:.1f} ГБ памяти и {threads} потоков '
         f'(ОЗУ {ram:.0f} ГБ, потоков процессора {os.cpu_count()})')
     flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-    procs = []
+    procs, finished = [], []
     ok, bad = 0, 0
+    timeout = float(FIJI_TIMEOUT_MIN or 0) * 60
+
+    def start(grp, sfx, tag, note=''):
+        progress = out_dir / f'_progress{sfx}.txt'
+        if progress.exists():
+            progress.unlink()
+        job = {**params(), 'input_dir': str(videos_dir), 'output_dir': str(out_dir), 'jobs': [list(j) for j in grp],
+               'progress_file': str(progress), 'THREADS': threads}
+        job_path = out_dir / f'_trackmate_params{sfx}.json'
+        job_path.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding='utf-8')
+        env = dict(os.environ, SPERMPIPELINE_PARAMS=str(job_path))
+        cmd = [fiji, f'--mem={heap_mb}m', '--ij2', '--headless', '--console', '--run', str(script)]
+        flog = (out_dir / f'_fiji_журнал{sfx.split("r")[0]}.txt').open('a', encoding='utf-8', errors='replace')
+        src = ', '.join(str(x[1]) for x in videos_dir) if isinstance(videos_dir, (list, tuple)) else videos_dir
+        flog.write(f'\n===== {time.strftime("%Y-%m-%d %H:%M:%S")}  {src}  ({tag or "Fiji"}{note}, '
+                   f'отрезков {len(grp)})\n')
+        flog.flush()
+        proc = subprocess.Popen(cmd, stdout=flog, stderr=subprocess.STDOUT, env=env, creationflags=flags)
+        procs.append({'proc': proc, 'progress': progress, 'flog': flog, 'seen': 0, 'grp': list(grp), 'sfx': sfx,
+                      'done': set(), 'cur': None, 'last': time.time(), 'restarts': 0,
+                      'tag': f'[{tag}] ' if tag else ''})
+
     try:
         for i, grp in enumerate(groups, 1):
-            sfx = '' if n == 1 else f'_{i}'
-            progress = out_dir / f'_progress{sfx}.txt'
-            job = {**params(), 'input_dir': str(videos_dir), 'output_dir': str(out_dir), 'jobs': [list(j) for j in grp],
-                   'progress_file': str(progress), 'THREADS': threads}
-            job_path = out_dir / f'_trackmate_params{sfx}.json'
-            job_path.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding='utf-8')
-            env = dict(os.environ, SPERMPIPELINE_PARAMS=str(job_path))
-            cmd = [fiji, f'--mem={heap_mb}m', '--ij2', '--headless', '--console', '--run', str(script)]
-            flog = (out_dir / f'_fiji_журнал{sfx}.txt').open('a', encoding='utf-8', errors='replace')
-            src = ', '.join(str(x[1]) for x in videos_dir) if isinstance(videos_dir, (list, tuple)) else videos_dir
-            flog.write(f'\n===== {time.strftime("%Y-%m-%d %H:%M:%S")}  {src}  (Fiji {i} из {n}, '
-                       f'отрезков {len(grp)})\n')
-            flog.flush()
-            proc = subprocess.Popen(cmd, stdout=flog, stderr=subprocess.STDOUT, env=env, creationflags=flags)
-            procs.append({'proc': proc, 'progress': progress, 'flog': flog, 'seen': 0,
-                          'tag': '' if n == 1 else f'[Fiji {i}] '})
+            start(grp, '' if n == 1 else f'_{i}', '' if n == 1 else f'Fiji {i}', f' {i} из {n}' if n > 1 else '')
             if n > 1:
                 log(f'  Fiji {i}: отрезков {len(grp)}')
         while True:
-            alive = [p['proc'].poll() is None for p in procs]
-            for p in procs:
+            alive = any(p['proc'].poll() is None for p in procs)   # до чтения прогресса: последние строки не теряются
+            for p in list(procs):
                 pr = p['progress']
                 lines = pr.read_text(encoding='utf-8', errors='replace').splitlines() if pr.exists() else []
+                if len(lines) > p['seen']:
+                    p['last'] = time.time()
                 for line in lines[p['seen']:]:
                     q = line.split('|')
                     if q[0] == 'OK':
                         ok += 1
+                        p['done'].add((q[1], q[2]))
                         res['ok'].append((q[1], q[2], int(q[3]), int(q[4]), int(q[5])))
                         log(f'  {p["tag"]}OK {q[1]} / {q[2]}: кадров {q[3]}, спотов {q[4]}, треков {q[5]}')
                     elif q[0] == 'ERR':
                         bad += 1
+                        p['done'].add((q[1], q[2] if len(q) > 3 else ''))
                         res['bad'].append((q[1], q[2] if len(q) > 3 else '', q[-1]))
                         log(f'  {p["tag"]}ОШИБКА {" / ".join(q[1:-1])}: {q[-1]}')
                     elif q[0] == 'AREA':
                         log(f'  {p["tag"]}{q[1]} / {q[2]}: максимумов {q[3]}, убрано по площади: мелких {q[4]}, '
                             f'крупных {q[5]}; площадь пятна под оставленными: медиана {q[6]}, наибольшая {q[7]} px')
                     elif q[0] == 'START':
+                        p['cur'] = (q[1], q[2])
                         log(f'  {p["tag"]}{q[1]} / {q[2]}: обработка…')
                 p['seen'] = len(lines)
-            if not any(alive):
+                # сторож: Fiji молчит дольше FIJI_TIMEOUT_MIN — снять, отрезок в ошибки, остальные — новой Fiji
+                if timeout and p['proc'].poll() is None and time.time() - p['last'] > timeout:
+                    p['proc'].kill()
+                    p['proc'].wait()
+                    p['flog'].write(f'\n===== {time.strftime("%Y-%m-%d %H:%M:%S")} сторож: нет прогресса '
+                                    f'{FIJI_TIMEOUT_MIN:g} мин — Fiji снята\n')
+                    p['flog'].close()
+                    procs.remove(p)
+                    finished.append(p)
+                    stuck = p['cur']
+                    msg = f'Fiji не отвечала {FIJI_TIMEOUT_MIN:g} мин — снята (FIJI_TIMEOUT_MIN)'
+                    if stuck and stuck not in p['done']:
+                        bad += 1
+                        p['done'].add(stuck)
+                        res['bad'].append((stuck[0], stuck[1], msg))
+                        log(f'  {p["tag"]}ОШИБКА {stuck[0]} / {stuck[1]}: {msg}')
+                    else:
+                        log(f'  {p["tag"]}{msg}')
+                    rest = [j for j in p['grp'] if (j[0], j[1]) not in p['done']]
+                    if stuck is None:
+                        rest = rest[1:]                       # молчала до первого отрезка — его и пропускаем
+                    if rest and not stop():
+                        k = p['restarts'] + 1
+                        log(f'  {p["tag"]}перезапускаю Fiji для оставшихся отрезков: {len(rest)}')
+                        start(rest, f'{p["sfx"]}r{k}', p['tag'].strip(' []'), f' перезапуск {k}')
+                        procs[-1]['restarts'] = k
+            if not alive and all(p['proc'].poll() is not None for p in procs):
                 break
             if stop():
                 for p in procs:
@@ -353,6 +392,7 @@ def run(fiji_exe: str, videos_dir, out_dir: Path, log=print, stop=lambda: False,
                 p['proc'].kill()
                 p['proc'].wait()
             p['flog'].close()
+    procs += finished
     codes = [p['proc'].poll() for p in procs]
     try:
         script.unlink()

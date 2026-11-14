@@ -149,6 +149,7 @@ def run_segment(job: dict) -> dict:
 # =============================================================================
 DONE_MARK = '_готово, кадры удалены.json'
 CUT_MARK = '_кадры нарезаны приложением.txt'
+SKIPPED = '_отрезки, снятые сторожем.txt'
 
 
 def one_by_one(g: dict, out_root: Path, all_dir: Path, frames_of, vdir, log, stop) -> list:
@@ -196,6 +197,14 @@ def one_by_one(g: dict, out_root: Path, all_dir: Path, frames_of, vdir, log, sto
         if stop():
             raise Stopped()
         n_ok = len(res['ok']) + len(res['already'])
+        hung = [b for b in res['bad'] if 'FIJI_TIMEOUT_MIN' in b[2]]
+        if hung and len(hung) == len(res['bad']) and n_ok:
+            # отрезки, на которых Fiji зависла, — пропускаем насовсем (при повторе зависнет снова); список — в журнал
+            with open(all_dir / SKIPPED, 'a', encoding='utf-8') as fh:
+                for b in hung:
+                    fh.write(f'{datetime.now():%Y-%m-%d %H:%M}\t{b[0]}\t{b[1]}\n')
+            log(f'  {f}: отрезков снято сторожем {len(hung)} — видео считаю без них (список: {all_dir / SKIPPED})')
+            res = {**res, 'bad': []}
         if res['bad'] or not n_ok:
             log(f'  {f}: TrackMate с ошибками (готово {n_ok}, ошибок {len(res["bad"])}) — кадры оставляю: {fdir}')
             failed.append(f)

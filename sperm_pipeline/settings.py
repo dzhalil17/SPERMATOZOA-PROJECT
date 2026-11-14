@@ -40,6 +40,7 @@ TRACKMATE = [
     ('GAP_CLOSING_MAX_DISTANCE', 'LAP-трекер: gap-closing max distance, px'),
     ('MAX_FRAME_GAP', 'LAP-трекер: gap-closing max frame gap'),
     ('VIDEO_EXT', 'Расширения видео (через пробел)'),
+    ('FIJI_TIMEOUT_MIN', 'Сторож: Fiji молчит столько минут — снять, отрезок в ошибки, дальше (0 — ждать)'),
 ]
 FILTRATION = [
     ('LINK_MAX_GAP', 'Сшивка: макс. пропуск кадров между фрагментами'),
