@@ -150,6 +150,7 @@ def run_segment(job: dict) -> dict:
 DONE_MARK = '_готово, кадры удалены.json'
 CUT_MARK = '_кадры нарезаны приложением.txt'
 SKIPPED = '_отрезки, снятые сторожем.txt'
+FAILED = '_видео, не прошедшие нарезку или TrackMate.txt'
 
 
 def one_by_one(g: dict, out_root: Path, all_dir: Path, frames_of, vdir, log, stop) -> list:
@@ -185,15 +186,31 @@ def one_by_one(g: dict, out_root: Path, all_dir: Path, frames_of, vdir, log, sto
                        dest=lambda x: str(frames_of(x)), only=[f], quiet=k > 1)
         except KeyboardInterrupt:
             raise Stopped()
-        if not fdir.is_dir():
-            log(f'  {f}: кадров нет (ошибка ffmpeg?) — пропускаю')
+        segs = [d for d in fdir.iterdir() if d.is_dir() and not d.name.startswith('_')] if fdir.is_dir() else []
+        if not segs:
+            # ffmpeg не смог прочитать видео (папка пустая) или ни один отрезок не прошёл фильтр кадров —
+            # TrackMate тут делать нечего; одно такое видео не должно останавливать весь прогон
+            why = 'ffmpeg не дал ни одного кадра (файл битый или не докачан?)' if not (
+                fdir.is_dir() and any(fdir.iterdir())) else 'ни одного отрезка: все кадры ушли в _rejected'
+            log(f'  {f}: {why} — пропускаю')
             failed.append(f)
+            if fdir.is_dir() and not any(fdir.iterdir()):
+                fdir.rmdir()
             continue
         if not had_frames:
             tm_dst.mkdir(parents=True, exist_ok=True)
             ours.write_text(str(fdir), encoding='utf-8')
-        res = trackmate.run(g.get('fiji_exe', ''), [(v, fdir)], all_dir / 'журналы Fiji', log, stop,
-                            raise_if_none=False, n_procs=int(g.get('fiji_procs') or 1), dest=lambda _: tm_dst)
+        try:
+            res = trackmate.run(g.get('fiji_exe', ''), [(v, fdir)], all_dir / 'журналы Fiji', log, stop,
+                                raise_if_none=False, n_procs=int(g.get('fiji_procs') or 1), dest=lambda _: tm_dst)
+        except (Stopped, KeyboardInterrupt):
+            raise
+        except Exception as e:
+            if stop():
+                raise Stopped()
+            log(f'  {f}: TrackMate не запустился ({type(e).__name__}: {e}) — пропускаю, кадры оставляю: {fdir}')
+            failed.append(f)
+            continue
         if stop():
             raise Stopped()
         n_ok = len(res['ok']) + len(res['already'])
@@ -223,6 +240,8 @@ def one_by_one(g: dict, out_root: Path, all_dir: Path, frames_of, vdir, log, sto
         log(f'  прошло {(time.time() - t0) / 60:.0f} мин, осталось примерно {left / 60:.0f} мин')
     if failed:
         log(f'\nНе прошли нарезку/TrackMate: {len(failed)} — {", ".join(failed)}')
+        (all_dir / FAILED).write_text('\n'.join(failed) + '\n', encoding='utf-8')
+        log(f'Список: {all_dir / FAILED}')
     if not out:
         raise RuntimeError('Ни одно видео не прошло TrackMate — см. журнал выше и журналы Fiji')
     return out
