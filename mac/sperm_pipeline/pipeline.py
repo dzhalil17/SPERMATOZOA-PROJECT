@@ -240,6 +240,7 @@ def one_by_one(g: dict, out_root: Path, all_dir: Path, frames_of, vdir, log, sto
         log(f'  прошло {(time.time() - t0) / 60:.0f} мин, осталось примерно {left / 60:.0f} мин')
     if failed:
         log(f'\nНе прошли нарезку/TrackMate: {len(failed)} — {", ".join(failed)}')
+        all_dir.mkdir(parents=True, exist_ok=True)
         (all_dir / FAILED).write_text('\n'.join(failed) + '\n', encoding='utf-8')
         log(f'Список: {all_dir / FAILED}')
     if not out:
