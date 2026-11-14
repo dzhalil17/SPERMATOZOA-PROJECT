@@ -1,0 +1,7 @@
+numpy
+pandas>=2.2
+networkx
+openpyxl
+scikit-learn
+hdbscan
+matplotlib

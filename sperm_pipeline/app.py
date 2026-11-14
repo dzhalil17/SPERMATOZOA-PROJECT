@@ -101,7 +101,7 @@ class App(tk.Tk):
 
         step_row('step_frames', '00. Нарезать видео (.mpg) на кадры через ffmpeg и разложить по отрезкам, брак — в _rejected')
         self.e_mpg = folder_row('mpg_dir', 'Видео (.mpg):', 'папка с 01.mpg, 02.mpg … → кадры «1 video», «2 video» …')
-        ttk.Label(f, text='ffmpeg:').grid(row=r, column=0, sticky='w', padx=(24, 4))
+        ttk.Label(f, text='ffmpeg.exe:').grid(row=r, column=0, sticky='w', padx=(24, 4))
         self.e_ffmpeg = ttk.Entry(f, textvariable=self.gv['ffmpeg_exe'], width=80)
         self.e_ffmpeg.grid(row=r, column=1, sticky='we')
         ttk.Button(f, text='…', width=3, command=lambda: self._pick_exe('ffmpeg_exe', 'ffmpeg.exe')).grid(
@@ -116,7 +116,7 @@ class App(tk.Tk):
         r += 1
         step_row('step_trackmate', '0. TrackMate в Fiji без окна: 8-bit → Gaussian → контраст → Find Maxima → LoG + LAP')
         self.e_videos = folder_row('videos_dir', 'Видео / кадры:', 'отрезок = папка с кадрами (png/jpg/tif) или файл .tif/.avi; папка над ними = видео; «_rejected» пропускается')
-        ttk.Label(f, text='Fiji (ImageJ-win64.exe / Fiji.app):').grid(row=r, column=0, sticky='w', padx=(24, 4))
+        ttk.Label(f, text='Fiji (ImageJ-win64.exe):').grid(row=r, column=0, sticky='w', padx=(24, 4))
         self.e_fiji = ttk.Entry(f, textvariable=self.gv['fiji_exe'], width=80)
         self.e_fiji.grid(row=r, column=1, sticky='we')
         ttk.Button(f, text='…', width=3, command=self._pick_fiji).grid(row=r, column=2, padx=2)
@@ -197,21 +197,13 @@ class App(tk.Tk):
         self.e_casa.configure(state='normal' if (cl or kd) and not flt else 'disabled')
 
     def _pick_exe(self, key, title):
-        types = [('Программа', '*.exe'), ('Все', '*.*')] if sys.platform == 'win32' else []
-        f = filedialog.askopenfilename(title=title, filetypes=types) if types else filedialog.askopenfilename(title=title)
+        f = filedialog.askopenfilename(title=title, filetypes=[('Программа', '*.exe'), ('Все', '*.*')])
         if f:
             self.gv[key].set(os.path.normpath(f))
 
     def _pick_fiji(self):
-        if sys.platform == 'win32':
-            f = filedialog.askopenfilename(title='Fiji: ImageJ-win64.exe', filetypes=[('Fiji', '*.exe'), ('Все', '*.*')])
-        else:                                     # на Mac Fiji.app — это папка: выбираем её, программа запуска найдётся
-            f = filedialog.askdirectory(title='Fiji: выберите папку Fiji.app')
+        f = filedialog.askopenfilename(title='Fiji: ImageJ-win64.exe', filetypes=[('Fiji', '*.exe'), ('Все', '*.*')])
         if f:
-            from .trackmate import resolve_fiji
-            if sys.platform != 'win32' and not resolve_fiji(f):
-                messagebox.showerror('Fiji', f'В {f} не найдена программа запуска Fiji (ImageJ-macosx / fiji-macos)')
-                return
             self.gv['fiji_exe'].set(os.path.normpath(f))
 
     def _pick(self, key):
@@ -369,7 +361,7 @@ class App(tk.Tk):
             if sys.platform == 'win32':
                 os.startfile(d)
             else:
-                subprocess.Popen(['open' if sys.platform == 'darwin' else 'xdg-open', d])
+                subprocess.Popen(['xdg-open', d])
 
     def _close(self):
         try:
